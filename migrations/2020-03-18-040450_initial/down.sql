@@ -1,7 +1,7 @@
+drop table single;
+
 drop view balance_history;
 
-drop table pc_transfers;
+drop table transfers;
 
-drop table gen_transfers;
-
-drop table gen;
+drop table item_types;

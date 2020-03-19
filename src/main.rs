@@ -32,7 +32,7 @@ impl serenity::prelude::TypeMapKey for DbPoolKey {
 }
 
 #[group]
-#[commands(ping, fabricate_gens, fabricate_pc, give, balances)]
+#[commands(ping, fabricate, give, balances)]
 struct General;
 
 use std::env;
@@ -42,10 +42,9 @@ struct Handler;
 impl EventHandler for Handler {}
 
 lazy_static! {
-    static ref USER_PING_RE: Regex = Regex::new(r"^\s*<@!?(\d+)>\s*$").unwrap();
+    static ref USER_PING_RE:Regex = Regex::new(r"^\s*<@!?(\d+)>\s*$").unwrap();
+    static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::seconds(30/*86400*/);
 }
-
-const GENERATE_EVERY_S:u32 = 30/*86400*/;
 
 trait FromCommandArgs : Sized {
     fn from_command_args(ctx: &Context, msg: &Message, arg: &str) -> Result<Self, &'static str>;
@@ -108,10 +107,26 @@ impl FromCommandArgs for UserId {
 }
 
 fn main() {
+    lazy_static::initialize(&GENERATE_EVERY);
+    lazy_static::initialize(&USER_PING_RE);
     dotenv::dotenv().unwrap();
 
     let pool = diesel::r2d2::Builder::new().build(diesel::r2d2::ConnectionManager::<diesel::PgConnection>::new(&env::var("DATABASE_URL").expect("DATABASE_URL expected"))).expect("could not build DB pool");
     let arc_pool = Arc::new(pool);
+
+    {
+        let conn = arc_pool.get().unwrap();
+        use schema::single::dsl::*;
+        use diesel::prelude::*;
+        use diesel::dsl::*;
+        if !(select(exists(single.filter(enforce_single_row))).get_result(&*conn).unwrap():bool) {
+            insert_into(single).values((
+                enforce_single_row.eq(true),
+                last_gen.eq(chrono::Utc::now())
+            )).execute(&*conn).unwrap();
+        }
+    }
+
     // Login with a bot token from the environment
     let mut client = Client::new(&env::var("DISCORD_TOKEN").expect("token"), Handler)
         .expect("Error creating client");
@@ -140,64 +155,55 @@ fn main() {
 
     let threads_conn = arc_pool.get().unwrap();
     thread::spawn(move || {
-        use schema::gen::dsl as gdsl;
+        // use schema::gen::dsl as gdsl;
+        use schema::transfers::dsl as tdsl;
         use diesel::prelude::*;
+        use view_schema::balance_history::dsl as bhdsl;
+        use schema::single::dsl as sdsl;
         let conn = threads_conn;
 
         loop {
+            /* not properly locking, but should only have one thread trying to access */
             let now = chrono::Utc::now();
-            let then = now - chrono::Duration::seconds(GENERATE_EVERY_S as i64);
-            let mut was_empty = true;
+            let last_gen:chrono::DateTime<chrono::Utc> = sdsl::single.select(sdsl::last_gen).get_result(&*conn).unwrap();
+            if now - last_gen < *GENERATE_EVERY {
+                thread::sleep(std::time::Duration::from_secs(1));
+                continue
+            }
+            eprintln!("Generating some political capital!");
             conn.transaction::<_, diesel::result::Error, _>(|| {
-                let to_payout:Vec<(i64, Option<i64>, chrono::DateTime<chrono::Utc>,)> = gdsl::gen
-                    .select((gdsl::rowid, gdsl::owner, gdsl::last_payout))
-                    .filter(gdsl::last_payout.lt(then))
-                    .limit(2000)
-                    .for_update()
-                    .get_results(&*conn)?;
+                diesel::sql_query("LOCK TABLE transfers IN EXCLUSIVE MODE;").execute(&*conn)?;
 
-                diesel::sql_query("LOCK TABLE pc_transfers IN EXCLUSIVE MODE;").execute(&*conn)?;
-                
-                let mut balances = <std::collections::HashMap<i64,i64>>::new();
-                for (rowid, maybe_owner, last_payout) in &to_payout {
-                    if let Some(owner) = maybe_owner {
-                        use schema::pc_transfers::dsl as pcdsl;
-                        let balance = balances.entry(*owner).or_insert_with(|| {
-                            use view_schema::balance_history::dsl as bhdsl;
-                            bhdsl::balance_history
+                let users:Vec<i64> = tdsl::transfers.select(tdsl::to_user).distinct().filter(tdsl::ty.eq("gen")).get_results(&*conn).unwrap();
+                for userid in &users {
+                    let balance = |ty_str:&'static str| {
+                        bhdsl::balance_history
                             .select(bhdsl::balance)
-                            .filter(bhdsl::user.eq(owner))
+                            .filter(bhdsl::user.eq(userid))
+                            .filter(bhdsl::ty.eq(ty_str))
                             .order(bhdsl::happened_at.desc())
                             .limit(1)
                             .get_result(&*conn)
                             .optional()
                             .unwrap()
-                            .unwrap_or(0)
-                        });
-
-                        *balance += 1;
-
-                        diesel::insert_into(pcdsl::pc_transfers).values((
-                            pcdsl::from_gen.eq(rowid),
-                            pcdsl::quantity.eq(1),
-                            pcdsl::to_user.eq(owner),
-                            pcdsl::to_balance.eq(*balance),
-                            pcdsl::happened_at.eq(&now),
-                        )).execute(&*conn).unwrap();
-                    }
-
-                    diesel::update(gdsl::gen.filter(gdsl::rowid.eq(rowid)))
-                    .set(gdsl::last_payout.eq(*last_payout + chrono::Duration::seconds(GENERATE_EVERY_S as i64)))
-                    .execute(&*conn).unwrap();
+                            .unwrap_or(0):i64
+                    };
+                    let gen_balance = balance("gen");
+                    let pc_balance = balance("pc");
+                    diesel::insert_into(tdsl::transfers).values((
+                        tdsl::ty.eq("pc"),
+                        tdsl::from_gen.eq(true),
+                        tdsl::quantity.eq(gen_balance),
+                        tdsl::to_user.eq(userid),
+                        tdsl::to_balance.eq(pc_balance + gen_balance),
+                        tdsl::happened_at.eq(now),
+                    )).execute(&*conn).unwrap();
                 }
 
-                was_empty = to_payout.is_empty();
-
+                diesel::update(sdsl::single).set(sdsl::last_gen.eq(last_gen + *GENERATE_EVERY)).execute(&*conn)?;
+                
                 Ok(())
             }).unwrap();
-            if was_empty {
-                thread::sleep(std::time::Duration::from_secs(1));
-            }
         }
     });
 
@@ -216,45 +222,55 @@ fn ping(ctx: &mut Context, msg: &Message) -> CommandResult {
     Ok(())
 }
 
+// #[command]
+// fn fabricate_gens(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
+//     let how_many:i64 = args.single()?;
+//     if how_many <= 0 {
+//         Err("fuck")?;
+//     }
+//     let user:UserId;
+//     if args.remaining() > 0 {
+//         let user_str = args.single()?:String;
+//         user = UserId::from_command_args(ctx, msg, &user_str)?;
+//     }else{
+//         user = msg.author.id;
+//     }
+
+//     let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
+
+//     let happened_at = chrono::Utc::now();
+
+//     conn.transaction::<_, diesel::result::Error, _>(|| {
+//         use diesel::prelude::*;
+//         for _ in 0..how_many {
+//             diesel::insert_into(schema::gen::table)
+//                 .values((
+//                     schema::gen::owner.eq(user.0 as i64),
+//                     schema::gen::last_payout.eq(happened_at),
+//                 ))
+//                 .execute(&*conn)?;
+//         }
+
+//         Ok(())
+//     })?;
+
+//     msg.reply(&ctx, "Fabricated.")?;
+
+//     Ok(())
+// }
+
 #[command]
-fn fabricate_gens(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
-    let how_many:i64 = args.single()?;
-    if how_many <= 0 {
-        Err("fuck")?;
+#[num_args(2)]
+fn fabricate(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
+    let ty:ItemType;
+    let ty_str:String = args.single()?;
+    if GEN_NAMES.contains(&&*ty_str) {
+        ty = ItemType::Generator
+    } else if PC_NAMES.contains(&&*ty_str) {
+        ty = ItemType::PoliticalCapital
+    } else {
+        return Err("Unrecognized type".into());
     }
-    let user:UserId;
-    if args.remaining() > 0 {
-        let user_str = args.single()?:String;
-        user = UserId::from_command_args(ctx, msg, &user_str)?;
-    }else{
-        user = msg.author.id;
-    }
-
-    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
-
-    let happened_at = chrono::Utc::now();
-
-    conn.transaction::<_, diesel::result::Error, _>(|| {
-        use diesel::prelude::*;
-        for _ in 0..how_many {
-            diesel::insert_into(schema::gen::table)
-                .values((
-                    schema::gen::owner.eq(user.0 as i64),
-                    schema::gen::last_payout.eq(happened_at),
-                ))
-                .execute(&*conn)?;
-        }
-
-        Ok(())
-    })?;
-
-    msg.reply(&ctx, "Fabricated.")?;
-
-    Ok(())
-}
-
-#[command]
-fn fabricate_pc(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
     let how_many:i64 = args.single()?;
     if how_many <= 0 {
         Err("fuck")?;
@@ -271,10 +287,11 @@ fn fabricate_pc(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResu
     conn.transaction::<_, diesel::result::Error, _>(|| {
         use diesel::prelude::*;
         use view_schema::balance_history::dsl as bh;
-        use schema::pc_transfers::dsl as pct;
+        use schema::transfers::dsl as tdsl;
         let prev_balance:i64 = view_schema::balance_history::table
           .select(bh::balance)
           .filter(bh::user.eq(user.0 as i64))
+          .filter(bh::ty.eq(ty.db_name()))
           .order(bh::happened_at.desc())
           .limit(1)
           .for_update()
@@ -282,12 +299,13 @@ fn fabricate_pc(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResu
           .optional()?
           .unwrap_or(0);
         
-        diesel::insert_into(pct::pc_transfers).values((
-            pct::quantity.eq(how_many),
-            pct::to_user.eq(msg.author.id.0 as i64),
-            pct::to_balance.eq(prev_balance + how_many),
-            pct::happened_at.eq(chrono::Utc::now()),
-            pct::message_id.eq(msg.id.0 as i64),
+        diesel::insert_into(tdsl::transfers).values((
+            tdsl::quantity.eq(how_many),
+            tdsl::to_user.eq(msg.author.id.0 as i64),
+            tdsl::to_balance.eq(prev_balance + how_many),
+            tdsl::happened_at.eq(chrono::Utc::now()),
+            tdsl::message_id.eq(msg.id.0 as i64),
+            tdsl::ty.eq(ty.db_name())
         )).execute(&*conn)?;
 
         Ok(())
@@ -299,27 +317,32 @@ fn fabricate_pc(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResu
 }
 
 #[command]
-#[aliases("balance", "inventory")]
+#[aliases("b","bal","balance", "inventory")]
 fn balances(ctx: &mut Context, msg: &Message) -> CommandResult {
     use diesel::prelude::*;
-    use schema::gen::dsl as gen;
     use view_schema::balance_history::dsl as bh;
     //use schema::pc_transfers::dsl as pct;
     
 
     let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
-    let gen_count:i64 = gen::gen.filter(gen::owner.eq(msg.author.id.0 as i64)).count().get_result(&conn)?;
-    let pc_count:Option<i64> = bh::balance_history
+    let get_bal = |ty_str:&'static str| {
+        bh::balance_history
         .select(bh::balance)
         .filter(bh::user.eq(msg.author.id.0 as i64))
+        .filter(bh::ty.eq(ty_str))
         .order(bh::happened_at.desc())
         .limit(1)
-        .get_result(&conn).optional()?;
+        .get_result(&*conn)
+        .optional()
+        .map(|opt| opt.unwrap_or(0i64)):Result<i64,_>
+    };
+    let gen_count = get_bal("gen")?;
+    let pc_count = get_bal("pc")?;
     msg.channel_id.send_message(&ctx, |cm| {
         cm.embed(|e| {
             e.title("Your balances:");
             e.field("Generators", gen_count, false);
-            e.field("Capital", pc_count.unwrap_or(0), false);
+            e.field("Capital", pc_count, false);
             e
         });
         cm
@@ -331,6 +354,15 @@ fn balances(ctx: &mut Context, msg: &Message) -> CommandResult {
 enum ItemType {
     PoliticalCapital,
     Generator,
+}
+
+impl ItemType {
+    pub fn db_name(&self) -> &'static str {
+        match *self {
+            ItemType::PoliticalCapital => "pc",
+            ItemType::Generator => "gen",
+        }
+    }
 }
 
 const PC_NAMES :&'static [&'static str] = &["pc","politicalcapital","political-capital","capital"];
@@ -383,118 +415,79 @@ fn give(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
         let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
 
         let mut fail:Option<&'static str> = None;
-        if ty == ItemType::Generator {
-            conn.transaction::<_, diesel::result::Error, _>(|| {
-                let gens:Vec<i64>;
-                use diesel::prelude::*;
-                {
-                    use schema::gen::dsl::*;
-                    gens = gen.select(rowid).filter(owner.eq(msg.author.id.0 as i64)).for_update().limit(amount as i64).get_results(&*conn)?;
-                    if gens.len() < amount as usize {
-                        fail = Some("Not enough gens");
-                        return Ok(());
-                    }
-                    let count_updated = diesel::update(gen.filter(rowid.eq_any(&gens))).set(owner.eq(user.0 as i64)).execute(&*conn)?;
-                    if count_updated < amount as usize {
-                        //something went very wrong, abort!
-                        return Err(diesel::result::Error::RollbackTransaction);
-                    }
-                }
-                use schema::gen_transfers;
-                #[derive(Insertable)]
-                #[table_name = "gen_transfers"]
-                struct GenTransfer
-                {
-                    from_user:i64,
-                    gen:i64,
-                    to_user:i64,
-                    happened_at:chrono::DateTime<chrono::Utc>,
-                    message_id:i64,
-                }
-                let mut gt = GenTransfer{
-                    from_user: msg.author.id.0 as i64,
-                    gen: 0,
-                    to_user: user.0 as i64,
-                    happened_at:chrono::Utc::now(),
-                    message_id: msg.id.0 as i64,
-                };
-                for id in &gens {
-                    gt.gen = *id;
-                    diesel::insert_into(gen_transfers::table).values(&gt).execute(&*conn)?;
-                }
-                Ok(())
-            })?;
-        } else if ty == ItemType::PoliticalCapital {
-            conn.transaction::<_, diesel::result::Error, _>(|| {
-                use diesel::prelude::*;
+        
+        conn.transaction::<_, diesel::result::Error, _>(|| {
+            use diesel::prelude::*;
 
-                use view_schema::balance_history::dsl as bh;
-                let mut ids = [msg.author.id.0, user.0];
-                let mut author = 0;
-                let mut dest = 1;
-                if ids[0] > ids[1] {
-                    ids = [ids[1],ids[0]];
-                    author = 1;
-                    dest = 0;
-                }
-                let balances:Vec<i64> = ids.iter().map::<Result<i64,diesel::result::Error>,_>(|id| {
-                    Ok(
-                        bh::balance_history
-                          .select(bh::balance)
-                          .filter(bh::user.eq(*id as i64))
-                          .order(bh::happened_at.desc())
-                          .limit(1)
-                          .for_update()
-                          .get_result(&*conn)
-                          .optional()?
-                          .unwrap_or(0i64)
-                    )
-                }).collect::<Result<_,_>>()?;
-                let sender_balance = balances[author];
-                let dest_balance = balances[dest];
-                if sender_balance < amount as i64 {
-                    fail = Some("Insufficient balance.");
-                    return Ok(());
-                }
+            use view_schema::balance_history::dsl as bh;
+            let mut ids = [msg.author.id.0, user.0];
+            let mut author = 0;
+            let mut dest = 1;
+            if ids[0] > ids[1] {
+                ids = [ids[1],ids[0]];
+                author = 1;
+                dest = 0;
+            }
+            let balances:Vec<i64> = ids.iter().map::<Result<i64,diesel::result::Error>,_>(|id| {
+                Ok(
+                    bh::balance_history
+                        .select(bh::balance)
+                        .filter(bh::user.eq(*id as i64))
+                        .filter(bh::ty.eq(ty.db_name()))
+                        .order(bh::happened_at.desc())
+                        .limit(1)
+                        .for_update()
+                        .get_result(&*conn)
+                        .optional()?
+                        .unwrap_or(0i64)
+                )
+            }).collect::<Result<_,_>>()?;
+            let sender_balance = balances[author];
+            let dest_balance = balances[dest];
+            if sender_balance < amount as i64 {
+                fail = Some("Insufficient balance.");
+                return Ok(());
+            }
 
-                use schema::pc_transfers;
-                #[derive(Insertable, Debug)]
-                #[table_name = "pc_transfers"]
-                struct Transfer {
-                    from_user:i64,
-                    quantity:i64,
-                    to_user:i64,
-                    from_balance:i64,
-                    to_balance:i64,
-                    happened_at:chrono::DateTime<chrono::Utc>,
-                    message_id:i64,
-                }
+            use schema::transfers;
+            #[derive(Insertable, Debug)]
+            #[table_name = "transfers"]
+            struct Transfer {
+                from_user:i64,
+                quantity:i64,
+                to_user:i64,
+                from_balance:i64,
+                to_balance:i64,
+                happened_at:chrono::DateTime<chrono::Utc>,
+                message_id:i64,
+                ty:&'static str,
+            }
 
-                let from_balance;
-                let to_balance;
-                if msg.author.id == user {
-                    from_balance = sender_balance;
-                    to_balance = sender_balance;
-                }else{
-                    from_balance = sender_balance - amount as i64;
-                    to_balance = dest_balance + amount as i64;
-                }
+            let from_balance;
+            let to_balance;
+            if msg.author.id == user {
+                from_balance = sender_balance;
+                to_balance = sender_balance;
+            }else{
+                from_balance = sender_balance - amount as i64;
+                to_balance = dest_balance + amount as i64;
+            }
 
-                let t = Transfer {
-                    from_user: msg.author.id.0 as i64,
-                    quantity: amount as i64,
-                    to_user: user.0 as i64,
-                    from_balance,
-                    to_balance,
-                    happened_at: chrono::Utc::now(),
-                    message_id: msg.id.0 as i64,
-                };
+            let t = Transfer {
+                from_user: msg.author.id.0 as i64,
+                quantity: amount as i64,
+                to_user: user.0 as i64,
+                from_balance,
+                to_balance,
+                happened_at: chrono::Utc::now(),
+                message_id: msg.id.0 as i64,
+                ty: ty.db_name(),
+            };
 
-                diesel::insert_into(schema::pc_transfers::table).values(&t).execute(&*conn)?;
+            diesel::insert_into(schema::transfers::table).values(&t).execute(&*conn)?;
 
-                Ok(())
-            })?;
-        }
+            Ok(())
+        })?;
         use serenity::model::misc::Mentionable;
         if let Some(fail_msg) = fail {
             msg.reply(&ctx, fail_msg)?;

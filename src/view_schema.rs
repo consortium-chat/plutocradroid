@@ -6,5 +6,6 @@ table! {
         quantity -> Int8,
         sign -> Int4,
         happened_at -> Timestamptz,
+        ty -> Text,
     }
 }
