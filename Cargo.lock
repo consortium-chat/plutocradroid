@@ -780,7 +780,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5894c618ce612a3fa23881b152b608bafb8c56cfc22f434a3ba3120b40f7b587"
 
 [[package]]
-name = "political-capital"
+name = "plutocradroid"
 version = "0.1.0"
 dependencies = [
  "chrono",
