@@ -828,6 +828,7 @@ const YES_WORDS:&'static[&'static str] = &[
     "pass",
 ];
 const NO_WORDS :&'static[&'static str] = &[
+    "neigh",
     "fail",
     "no", //no in sardinian
     "against",
