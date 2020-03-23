@@ -135,10 +135,13 @@ impl FromCommandArgs for UserId {
 
 impl EventHandler for Handler {
     fn reaction_add(&self, mut ctx: Context, r: serenity::model::channel::Reaction) {
-        dbg!(&r);
+        //dbg!(&r);
         let mut vote_count = 1;
         let mut vote_direction = None;
         let user_id = r.user_id.clone();
+        if user_id == ctx.cache.read().user.id {
+            return;
+        }
         let message_id = r.message_id.clone();
         if let serenity::model::channel::ReactionType::Custom{animated: _, id, name: _} = r.emoji {
             if let Some(action) = SPECIAL_EMOJI.get(&id.0) {
@@ -785,7 +788,7 @@ fn motion_common(ctx:&mut Context, msg:&Message, args:Args, is_super: bool) -> C
         let mut emojis:Vec<_> = (*SPECIAL_EMOJI).iter().collect();
         emojis.sort_unstable_by_key(|(_,a)| match *a { SpecialEmojiAction::Yes => -1, SpecialEmojiAction::No => -1, SpecialEmojiAction::Amount(a) => (*a) as i64 });
         for (emoji_id, _) in emojis {
-            dbg!(&emoji_id);
+            //dbg!(&emoji_id);
             serenity::model::id::ChannelId::from(MOTIONS_CHANNEL)
                 .create_reaction(
                     &ctx,
