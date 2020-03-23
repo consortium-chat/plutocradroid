@@ -3,6 +3,8 @@
 extern crate diesel;
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate maplit;
 
 mod schema;
 mod view_schema;
@@ -41,12 +43,30 @@ use std::env;
 
 struct Handler;
 
-impl EventHandler for Handler {}
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+enum SpecialEmojiAction {
+    Yes,
+    No,
+    Amount(u64),
+}
 
 lazy_static! {
     static ref USER_PING_RE:Regex = Regex::new(r"^\s*<@!?(\d+)>\s*$").unwrap();
     static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::seconds(30); //chrono::Duration::hours(24);
     static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::minutes(20); //chrono::Duration::hours(48);
+    static ref SPECIAL_EMOJI:std::collections::HashMap<u64,SpecialEmojiAction> = hashmap!{
+        690487946054205470 => SpecialEmojiAction::Amount(1),
+        690487945945153557 => SpecialEmojiAction::Amount(2),
+        690487946213589032 => SpecialEmojiAction::Amount(5),
+        690487945701883954 => SpecialEmojiAction::Amount(10),
+        690487945936764969 => SpecialEmojiAction::Amount(20),
+        690487945072869457 => SpecialEmojiAction::Amount(50),
+        690487944552644639 => SpecialEmojiAction::Amount(100),
+        690487968695058432 => SpecialEmojiAction::Amount(10),
+        690487968523223051 => SpecialEmojiAction::Amount(1),
+        691352947820462121 => SpecialEmojiAction::Yes,
+        691352948072120380 => SpecialEmojiAction::No,
+    };
 }
 
 const VOTE_BASE_COST:u16 = 40;
@@ -113,8 +133,39 @@ impl FromCommandArgs for UserId {
     }
 }
 
+impl EventHandler for Handler {
+    fn reaction_add(&self, mut ctx: Context, r: serenity::model::channel::Reaction) {
+        dbg!(&r);
+        let mut vote_count = 1;
+        let mut vote_direction = None;
+        let user_id = r.user_id.clone();
+        let message_id = r.message_id.clone();
+        if let serenity::model::channel::ReactionType::Custom{animated: _, id, name: _} = r.emoji {
+            if let Some(action) = SPECIAL_EMOJI.get(&id.0) {
+                match action {
+                    SpecialEmojiAction::Yes => vote_direction = Some(true),
+                    SpecialEmojiAction::No => vote_direction = Some(false),
+                    SpecialEmojiAction::Amount(a) => vote_count = *a,
+                }
+                let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get().unwrap();
+                let resp = vote_common(
+                    &mut ctx,
+                    &*conn,
+                    vote_direction,
+                    vote_count as i64,
+                    user_id.0 as i64,//user_id,
+                    None, //motion_id:Option<i64>,
+                    Some(message_id.0 as i64), //message_id:Option<i64>,
+                    None, //command_message_id:Option<i64>,
+                );
+                user_id.create_dm_channel(&ctx).unwrap().say(&ctx, resp).unwrap();
+            }
+        }
+    }
+}
+
 fn nth_vote_cost(n:i64) -> Result<i64,()> {
-    let res:f64 = (1.05f64).powf((n-1) as f64);
+    let res:f64 = (VOTE_BASE_COST as f64) * (1.05f64).powf((n-1) as f64);
     if res < 0.0 {
         return Err(())
     } else if res > 4611686018427388000.0 {
@@ -731,6 +782,23 @@ fn motion_common(ctx:&mut Context, msg:&Message, args:Args, is_super: bool) -> C
     //let mut motion_message = ctx.http.get_message(MOTIONS_CHANNEL, motion_id_outer.unwrap() as u64)?;
     if let Some(mut motion_message) = motion_message_outer {
         update_motion_message(ctx, &*conn, &mut motion_message)?;
+        let mut emojis:Vec<_> = (*SPECIAL_EMOJI).iter().collect();
+        emojis.sort_unstable_by_key(|(_,a)| match *a { SpecialEmojiAction::Yes => -1, SpecialEmojiAction::No => -1, SpecialEmojiAction::Amount(a) => (*a) as i64 });
+        for (emoji_id, _) in emojis {
+            dbg!(&emoji_id);
+            serenity::model::id::ChannelId::from(MOTIONS_CHANNEL)
+                .create_reaction(
+                    &ctx,
+                    &motion_message,
+                    serenity::model::channel::ReactionType::Custom{
+                        animated: false,
+                        id: (*emoji_id).into(),
+                        name: Some("no".to_string())
+                    }
+                ).unwrap()
+            ;
+        }
+
     }
 
     Ok(())
@@ -778,6 +846,7 @@ const NO_WORDS :&'static[&'static str] = &[
     "veto", 
     "no", //no in ligurian
     "\u{1f44e}", 
+    "deny",
     ":-1:", 
     ":thumbsdown:",
     ".i na go'i", //no in lojban
@@ -809,10 +878,10 @@ fn is_win(yes_votes:i64, no_votes:i64, is_super:bool) -> bool {
 }
 
 #[command]
-#[min_args(2)]
+#[min_args(1)]
 fn vote(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
     let checksummed_motion_id:String = args.single()?;
-    dbg!(&checksummed_motion_id);
+    //dbg!(&checksummed_motion_id);
     if let Some(digit_arr) = damm::validate(&checksummed_motion_id) {
         let mut motion_id:i64 = 0;
         for d in &digit_arr {
@@ -820,12 +889,12 @@ fn vote(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
             motion_id += *d as i64;
         }
         let motion_id = motion_id;
-        dbg!(&motion_id);
+        //dbg!(&motion_id);
 
         let mut vote_count = 1;
         let mut vote_direction:Option<bool> = None;
         for args_result in args.iter::<String>() {
-            dbg!(&args_result);
+            //dbg!(&args_result);
             let arg = args_result?;
             if YES_WORDS.contains(&&*arg) {
                 vote_direction = Some(true);
@@ -840,180 +909,221 @@ fn vote(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
                 }
             }
         }
-        dbg!(&vote_count, &vote_direction);
+        //dbg!(&vote_count, &vote_direction);
 
         let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
-        let mut fail:Option<&'static str> = None;
-        let mut motion_message_id_outer:Option<i64> = None;
-        let txn_res = conn.transaction::<_, diesel::result::Error, _>(|| {
-            use diesel::prelude::*;
-            use schema::motions::dsl as mdsl;
-            use schema::motion_votes::dsl as mvdsl;
-            use view_schema::balance_history::dsl as bhdsl;
-            use schema::transfers::dsl as tdsl;
-
-            let res:Option<(bool, bool, i64)> = mdsl::motions
-            .filter(mdsl::rowid.eq(motion_id))
-            .select((mdsl::announcement_message_id.is_null(), mdsl::is_super, mdsl::bot_message_id))
-            .for_update()
-            .get_result(&*conn)
-            .optional()?;
-            dbg!(&res);
-
-            if let Some((not_announced, is_super, motion_message_id)) = res {
-                let motion_message_id_outer = Some(motion_message_id);
-                if not_announced {
-                    dbg!();
-                    mvdsl::motion_votes //obtain a lock on all votes
-                    .select(mvdsl::amount)
-                    .filter(mvdsl::motion.eq(motion_id))
-                    .for_update()
-                    .execute(&*conn)?;
-
-                    dbg!();
-                    let voted_so_far:i64;
-                    let outer_dir:bool;
-                    let maybe_vote_res:Option<(bool, i64)> = mvdsl::motion_votes
-                    .filter(mvdsl::motion.eq(motion_id))
-                    .filter(mvdsl::user.eq(msg.author.id.0 as i64))
-                    .select((mvdsl::direction, mvdsl::amount))
-                    .for_update()
-                    .get_result(&*conn)
-                    .optional()?;
-                    dbg!();
-
-                    if let Some((dir, count)) = maybe_vote_res {
-                        if let Some(requested_dir) = vote_direction {
-                            if requested_dir != dir {
-                                fail = Some("You cannot change your vote.");
-                                return Err(diesel::result::Error::RollbackTransaction);
-                            }
-                        }
-                        voted_so_far = count;
-                        outer_dir = dir;
-                    } else {
-                        if vote_direction.is_none() {
-                            fail = Some("You must specify how you want to vote!");
-                            return Err(diesel::result::Error::RollbackTransaction);
-                        }
-                        dbg!();
-                        diesel::insert_into(mvdsl::motion_votes).values((
-                            mvdsl::motion.eq(motion_id),
-                            mvdsl::user.eq(msg.author.id.0 as i64),
-                            mvdsl::amount.eq(0),
-                            mvdsl::direction.eq(vote_direction.unwrap()),
-                        )).on_conflict_do_nothing().execute(&*conn)?;
-                        dbg!();
-
-                        let vote_res:(bool, i64) = mvdsl::motion_votes
-                        .filter(mvdsl::motion.eq(motion_id))
-                        .filter(mvdsl::user.eq(msg.author.id.0 as i64))
-                        .select((mvdsl::direction, mvdsl::amount))
-                        .for_update()
-                        .get_result(&*conn)?;
-                        dbg!(&vote_res);
-                        voted_so_far = vote_res.1;
-                        outer_dir = vote_res.0;
-                    }
-
-                    dbg!(&voted_so_far, &outer_dir, &vote_count);
-                    let mut cost = 0;
-                    for nth in voted_so_far+1..voted_so_far+vote_count+1 {
-                        cost += nth_vote_cost(nth).unwrap();
-                    }
-                    dbg!(&cost);
-
-                    let balance:i64 = bhdsl::balance_history
-                    .select(bhdsl::balance)
-                    .filter(bhdsl::user.eq(msg.author.id.0 as i64))
-                    .filter(bhdsl::ty.eq("pc"))
-                    .order(bhdsl::happened_at.desc())
-                    .limit(1)
-                    .for_update()
-                    .get_result(&*conn)
-                    .optional()?
-                    .unwrap_or(0);
-                    dbg!(&balance);
-
-                    if cost > balance {
-                        fail = Some("Not enough capital.");
-                        return Err(diesel::result::Error::RollbackTransaction);
-                    }
-
-                    let now = chrono::Utc::now();
-
-                    diesel::insert_into(tdsl::transfers).values((
-                        tdsl::ty.eq("pc"),
-                        tdsl::from_user.eq(msg.author.id.0 as i64),
-                        tdsl::quantity.eq(cost),
-                        tdsl::from_balance.eq(balance - cost),
-                        tdsl::happened_at.eq(now),
-                        tdsl::message_id.eq(msg.id.0 as i64),
-                        tdsl::to_motion.eq(motion_id),
-                        tdsl::to_votes.eq(vote_count),
-                    )).execute(&*conn)?;
-                    dbg!();
-
-                    use bigdecimal::{BigDecimal,ToPrimitive};
-                    let get_vote_count = |dir:bool| -> Result<i64, diesel::result::Error> {
-                        let votes:Option<BigDecimal> = mvdsl::motion_votes
-                        .select(diesel::dsl::sum(mvdsl::amount))
-                        .filter(mvdsl::motion.eq(motion_id))
-                        .filter(mvdsl::direction.eq(dir))
-                        .get_result(&*conn)?;
-                        Ok(votes.map(|bd| bd.to_i64().unwrap()).unwrap_or(0))
-                    };
-                    let mut yes_votes = get_vote_count(true)?;
-                    let mut no_votes = get_vote_count(false)?;
-                    dbg!(&yes_votes, &no_votes);
-                    
-                    let result_before:bool;
-                    let result_after:bool;
-                    result_before = is_win(yes_votes, no_votes, is_super);
-                    if outer_dir {
-                        yes_votes += vote_count;
-                    }else{
-                        no_votes += vote_count;
-                    }
-                    result_after = is_win(yes_votes, no_votes, is_super);
-
-                    diesel::update(
-                        mvdsl::motion_votes.filter(mvdsl::motion.eq(motion_id)).filter(mvdsl::user.eq(msg.author.id.0 as i64))
-                    ).set(
-                        mvdsl::amount.eq(voted_so_far + vote_count)
-                    ).execute(&*conn)?;
-                    dbg!();
-
-                    if result_before != result_after {
-                        diesel::update(mdsl::motions.filter(mdsl::rowid.eq(motion_id))).set(
-                            mdsl::last_result_change.eq(chrono::Utc::now())
-                        ).execute(&*conn)?;
-                        dbg!();
-                    }
-                    dbg!();
-                    if let Some(motion_message_id) = motion_message_id_outer {
-                        let mut motion_message = ctx.http.get_message(MOTIONS_CHANNEL, motion_message_id as u64).unwrap();
-
-                        update_motion_message(ctx, &*conn, &mut motion_message).unwrap(); 
-                    }
-                }else{
-                    fail = Some("Motion has expired.");
-                    return Err(diesel::result::Error::RollbackTransaction);
-                }
-            }else{
-                fail = Some("Motion not found.");
-                return Err(diesel::result::Error::RollbackTransaction);
-            }
-
-            Ok(())
-        });
-        if let Some(msg) = fail {
-            return Err(msg.into());
-        }
-        txn_res?;
-        msg.reply(&ctx, "Vote counted!").unwrap();
+        let response = vote_common(
+            ctx,
+            &*conn,
+            vote_direction,
+            vote_count,
+            msg.author.id.0 as i64,
+            Some(motion_id),
+            None,
+            Some(msg.id.0 as i64),
+        );
+        msg.reply(&ctx, response).unwrap();
+        
+        //msg.reply(&ctx, "Vote counted!").unwrap();
     }else{
         Err("Invalid motion id, please try again.")?;
     }
     Ok(())
+}
+
+use std::borrow::Cow;
+
+fn vote_common(
+    ctx: &mut Context,
+    conn: &diesel::PgConnection,
+    vote_direction:Option<bool>,
+    vote_count:i64,
+    user_id:i64,
+    motion_id:Option<i64>,
+    message_id:Option<i64>,
+    command_message_id:Option<i64>,
+) -> Cow<'static, str> {
+    let mut fail:Option<&'static str> = None;
+    let mut outer_cost:Option<i64> = None;
+    let mut outer_motion_id:Option<i64> = None;
+    let mut outer_vote_ordinal_start:Option<i64> = None;
+    let mut outer_vote_ordinal_end:Option<i64> = None;
+    let txn_res = conn.transaction::<_, diesel::result::Error, _>(|| {
+        use diesel::prelude::*;
+        use schema::motions::dsl as mdsl;
+        use schema::motion_votes::dsl as mvdsl;
+        use view_schema::balance_history::dsl as bhdsl;
+        use schema::transfers::dsl as tdsl;
+
+        let res:Option<(i64, bool, bool, i64)> = mdsl::motions
+        .filter(mdsl::rowid.eq(motion_id.unwrap_or(-1)).or(mdsl::bot_message_id.eq(message_id.unwrap_or(-1))))
+        .select((mdsl::rowid, mdsl::announcement_message_id.is_null(), mdsl::is_super, mdsl::bot_message_id))
+        .for_update()
+        .get_result(conn)
+        .optional()?;
+        //dbg!(&res);
+
+        if let Some((motion_id, not_announced, is_super, motion_message_id)) = res {
+            outer_motion_id = Some(motion_id);
+            if not_announced {
+                //dbg!();
+                mvdsl::motion_votes //obtain a lock on all votes
+                .select(mvdsl::amount)
+                .filter(mvdsl::motion.eq(motion_id))
+                .for_update()
+                .execute(&*conn)?;
+
+                //dbg!();
+                let voted_so_far:i64;
+                let outer_dir:bool;
+                let maybe_vote_res:Option<(bool, i64)> = mvdsl::motion_votes
+                .filter(mvdsl::motion.eq(motion_id))
+                .filter(mvdsl::user.eq(user_id))
+                .select((mvdsl::direction, mvdsl::amount))
+                .for_update()
+                .get_result(&*conn)
+                .optional()?;
+                //dbg!();
+
+                if let Some((dir, count)) = maybe_vote_res {
+                    if let Some(requested_dir) = vote_direction {
+                        if requested_dir != dir {
+                            fail = Some("You cannot change your vote.");
+                            return Err(diesel::result::Error::RollbackTransaction);
+                        }
+                    }
+                    voted_so_far = count;
+                    outer_dir = dir;
+                } else {
+                    if vote_direction.is_none() {
+                        fail = Some("You must specify how you want to vote!");
+                        return Err(diesel::result::Error::RollbackTransaction);
+                    }
+                    //dbg!();
+                    diesel::insert_into(mvdsl::motion_votes).values((
+                        mvdsl::motion.eq(motion_id),
+                        mvdsl::user.eq(user_id),
+                        mvdsl::amount.eq(0),
+                        mvdsl::direction.eq(vote_direction.unwrap()),
+                    )).on_conflict_do_nothing().execute(&*conn)?;
+                    //dbg!();
+
+                    let vote_res:(bool, i64) = mvdsl::motion_votes
+                    .filter(mvdsl::motion.eq(motion_id))
+                    .filter(mvdsl::user.eq(user_id))
+                    .select((mvdsl::direction, mvdsl::amount))
+                    .for_update()
+                    .get_result(&*conn)?;
+                    //dbg!(&vote_res);
+                    voted_so_far = vote_res.1;
+                    outer_dir = vote_res.0;
+                }
+
+                //dbg!(&voted_so_far, &outer_dir, &vote_count);
+                let mut cost = 0;
+                outer_vote_ordinal_start = Some(voted_so_far + 1);
+                outer_vote_ordinal_end = Some(voted_so_far + vote_count + 1); 
+                for nth in voted_so_far+1..voted_so_far+vote_count+1 {
+                    cost += nth_vote_cost(nth).unwrap();
+                }
+                //dbg!(&cost);
+                outer_cost = Some(cost);
+
+                let balance:i64 = bhdsl::balance_history
+                .select(bhdsl::balance)
+                .filter(bhdsl::user.eq(user_id))
+                .filter(bhdsl::ty.eq("pc"))
+                .order(bhdsl::happened_at.desc())
+                .limit(1)
+                .for_update()
+                .get_result(&*conn)
+                .optional()?
+                .unwrap_or(0);
+                //dbg!(&balance);
+
+                if cost > balance {
+                    fail = Some("Not enough capital.");
+                    return Err(diesel::result::Error::RollbackTransaction);
+                }
+
+                let now = chrono::Utc::now();
+
+                diesel::insert_into(tdsl::transfers).values((
+                    tdsl::ty.eq("pc"),
+                    tdsl::from_user.eq(user_id),
+                    tdsl::quantity.eq(cost),
+                    tdsl::from_balance.eq(balance - cost),
+                    tdsl::happened_at.eq(now),
+                    tdsl::message_id.eq(command_message_id),
+                    tdsl::to_motion.eq(motion_id),
+                    tdsl::to_votes.eq(vote_count),
+                )).execute(&*conn)?;
+                //dbg!();
+
+                use bigdecimal::{BigDecimal,ToPrimitive};
+                let get_vote_count = |dir:bool| -> Result<i64, diesel::result::Error> {
+                    let votes:Option<BigDecimal> = mvdsl::motion_votes
+                    .select(diesel::dsl::sum(mvdsl::amount))
+                    .filter(mvdsl::motion.eq(motion_id))
+                    .filter(mvdsl::direction.eq(dir))
+                    .get_result(&*conn)?;
+                    Ok(votes.map(|bd| bd.to_i64().unwrap()).unwrap_or(0))
+                };
+                let mut yes_votes = get_vote_count(true)?;
+                let mut no_votes = get_vote_count(false)?;
+                //dbg!(&yes_votes, &no_votes);
+                
+                let result_before:bool;
+                let result_after:bool;
+                result_before = is_win(yes_votes, no_votes, is_super);
+                if outer_dir {
+                    yes_votes += vote_count;
+                }else{
+                    no_votes += vote_count;
+                }
+                result_after = is_win(yes_votes, no_votes, is_super);
+
+                diesel::update(
+                    mvdsl::motion_votes.filter(mvdsl::motion.eq(motion_id)).filter(mvdsl::user.eq(user_id))
+                ).set(
+                    mvdsl::amount.eq(voted_so_far + vote_count)
+                ).execute(&*conn)?;
+                //dbg!();
+
+                if result_before != result_after {
+                    diesel::update(mdsl::motions.filter(mdsl::rowid.eq(motion_id))).set(
+                        mdsl::last_result_change.eq(chrono::Utc::now())
+                    ).execute(&*conn)?;
+                    dbg!();
+                }
+                //dbg!();
+
+                let mut motion_message = ctx.http.get_message(MOTIONS_CHANNEL, motion_message_id as u64).unwrap();
+                update_motion_message(ctx, &*conn, &mut motion_message).unwrap(); 
+            }else{
+                fail = Some("Motion has expired.");
+                return Err(diesel::result::Error::RollbackTransaction);
+            }
+        }else{
+            fail = Some("Motion not found.");
+            return Err(diesel::result::Error::RollbackTransaction);
+        }
+
+        Ok(())
+    });
+    if let Some(msg) = fail {
+        return Cow::Borrowed(msg);
+    }
+    txn_res.unwrap();
+    if let (Some(cost), Some(motion_id), Some(ordinal_start), Some(ordinal_end)) = (outer_cost, outer_motion_id, outer_vote_ordinal_start, outer_vote_ordinal_end) {
+        return Cow::Owned(format!(
+            "Voted on motion #{} {} times, {} to {}, costing {} capital",
+            motion_id,
+            vote_count,
+            ordinal::Ordinal(ordinal_start),
+            ordinal::Ordinal(ordinal_end),
+            cost,
+        ));
+    }
+    return Cow::Borrowed("Vote cast");
 }
