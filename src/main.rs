@@ -1098,7 +1098,7 @@ fn vote_common(
                     diesel::update(mdsl::motions.filter(mdsl::rowid.eq(motion_id))).set(
                         mdsl::last_result_change.eq(chrono::Utc::now())
                     ).execute(&*conn)?;
-                    dbg!();
+                    //dbg!();
                 }
                 //dbg!();
 
