@@ -16,3 +16,6 @@ chrono = "*"
 bigdecimal = "*"
 maplit = "1.0.2"
 ordinal = "*"
+
+[features]
+debug = []

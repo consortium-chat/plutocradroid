@@ -36,8 +36,12 @@ impl serenity::prelude::TypeMapKey for DbPoolKey {
 }
 
 #[group]
-#[commands(ping, fabricate, give, balances, motion, supermotion, vote)]
+#[commands(ping, give, balances, motion, supermotion, vote)]
 struct General;
+
+#[group]
+#[commands(fabricate)]
+struct Debug;
 
 use std::env;
 
@@ -52,8 +56,6 @@ enum SpecialEmojiAction {
 
 lazy_static! {
     static ref USER_PING_RE:Regex = Regex::new(r"^\s*<@!?(\d+)>\s*$").unwrap();
-    static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::seconds(30); //chrono::Duration::hours(24);
-    static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::minutes(20); //chrono::Duration::hours(48);
     static ref SPECIAL_EMOJI:std::collections::HashMap<u64,SpecialEmojiAction> = hashmap!{
         690487946054205470 => SpecialEmojiAction::Amount(1),
         690487945945153557 => SpecialEmojiAction::Amount(2),
@@ -69,8 +71,22 @@ lazy_static! {
     };
 }
 
+#[cfg(debug)]
+lazy_static! {
+    static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::seconds(30);
+    static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::minutes(20);
+}
+
+#[cfg(not(debug))]
+lazy_static! {
+    static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::hours(24);
+    static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::hours(48);
+}
+
 const VOTE_BASE_COST:u16 = 40;
-//const MOTIONS_CHANNEL:u64 = 609093491150028800; //bureaucracy channel
+#[cfg(not(debug))]
+const MOTIONS_CHANNEL:u64 = 609093491150028800; //bureaucracy channel
+#[cfg(debug)]
 const MOTIONS_CHANNEL:u64 = 560918427091468387; //spam channel
 
 trait FromCommandArgs : Sized {
@@ -206,25 +222,23 @@ fn main() {
     let mut write_handle = client.data.write();
     write_handle.insert::<DbPoolKey>(Arc::clone(&arc_pool));
     drop(write_handle);
-    client.with_framework(StandardFramework::new()
-        .configure(|c| c.prefix("$")) // set the bot's prefix to "~"
-        .group(&GENERAL_GROUP)
-        .on_dispatch_error(|_ctx, msg, err| {
-            println!(
-                "{:?}\nerr'd with {:?}",
-                msg, err
-            );
-        })
-        .after(|ctx, msg, _command_name, res| {
-            if let Err(e) = res {
-                msg.reply(ctx, format!("ERR: {:?}", e)).unwrap();
-            }
-            // println!(
-            //     "{:#?}\n{:?} {:?}",
-            //     msg, s, res
-            // );
-        })
-    );
+    let mut framework = StandardFramework::new()
+    .configure(|c| c.prefix("$")) // set the bot's prefix to "$"
+    .on_dispatch_error(|_ctx, msg, err| {
+        println!(
+            "{:?}\nerr'd with {:?}",
+            msg, err
+        );
+    })
+    .after(|ctx, msg, _command_name, res| {
+        if let Err(e) = res {
+            msg.reply(ctx, format!("ERR: {:?}", e)).unwrap();
+        }
+    });
+    framework = framework.group(&GENERAL_GROUP);
+    #[cfg(debug)]
+    { framework = framework.group(&DEBUG_GROUP); }
+    client.with_framework(framework);
 
     let cnh = Arc::clone(&client.cache_and_http);
     let announce_threads_conn = arc_pool.get().unwrap();
@@ -241,11 +255,6 @@ fn main() {
                 .filter(mdsl::last_result_change.lt(now - *MOTION_EXPIRATION))
                 .select((mdsl::motion_text, mdsl::rowid, mdsl::is_super))
                 .get_results(&*conn).unwrap();
-            //let announcing_motions:Vec<i64> = mdsl::motions
-            //    .select(mdsl::rowid)
-            //    .filter(mdsl::announcement_message_id.is_null())
-            //    .filter(mdsl::last_result_change.lt(now - chrono::Duration::hours(48)))
-            //    .get_results(&*conn).unwrap();
             for (motion_text, motion_id, is_super) in &motions {
                 #[derive(Queryable,Debug)]
                 struct MotionVote {
@@ -389,7 +398,6 @@ fn update_motion_message(ctx: &mut Context, conn: &diesel::pg::PgConnection, msg
             } else {
                 e.field("Votes", format!("**against {}**/{} for", no_votes, yes_votes), false);
             }
-            //.field("Votes", "**for 1**/0 against", false)
             for vote in &votes[0..std::cmp::min(votes.len(),21)] {
                 e.field(serenity::model::id::UserId::from(vote.user as u64), format!("{} {}", vote.amount, if vote.direction {"for"} else {"against"}), true);
             }
@@ -409,43 +417,6 @@ fn ping(ctx: &mut Context, msg: &Message) -> CommandResult {
 
     Ok(())
 }
-
-// #[command]
-// fn fabricate_gens(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
-//     let how_many:i64 = args.single()?;
-//     if how_many <= 0 {
-//         Err("fuck")?;
-//     }
-//     let user:UserId;
-//     if args.remaining() > 0 {
-//         let user_str = args.single()?:String;
-//         user = UserId::from_command_args(ctx, msg, &user_str)?;
-//     }else{
-//         user = msg.author.id;
-//     }
-
-//     let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
-
-//     let happened_at = chrono::Utc::now();
-
-//     conn.transaction::<_, diesel::result::Error, _>(|| {
-//         use diesel::prelude::*;
-//         for _ in 0..how_many {
-//             diesel::insert_into(schema::gen::table)
-//                 .values((
-//                     schema::gen::owner.eq(user.0 as i64),
-//                     schema::gen::last_payout.eq(happened_at),
-//                 ))
-//                 .execute(&*conn)?;
-//         }
-
-//         Ok(())
-//     })?;
-
-//     msg.reply(&ctx, "Fabricated.")?;
-
-//     Ok(())
-// }
 
 #[command]
 #[num_args(2)]
