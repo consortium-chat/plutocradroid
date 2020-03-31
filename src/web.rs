@@ -81,7 +81,7 @@ pub fn web_main() {
     router.get("/", index, "index");
     router.get("/hello", hello_world, "hello world");
     router.get("/motions", motions, "motions");
-    router.get("/motion_votes/:id", motion_votes, "motion_votes");
+    router.get("/votes/:id", motion_votes, "motion_votes");
     //router.get("/:query", handler, "query");
 
     let mut chain = Chain::new(router);
