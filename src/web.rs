@@ -9,7 +9,7 @@ use chrono::{DateTime,Utc};
 use crate::schema;
 //use crate::view_schema;
 use crate::iron_diesel::{DieselReqExt, DieselMiddleware};
-use crate::iron_cors::CorsMiddleware;
+use iron_cors::CorsMiddleware;
 
 use serde::Serialize;
 
