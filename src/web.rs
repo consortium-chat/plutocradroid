@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
 use iron::prelude::*;
 use iron::status;
 use router::Router;
@@ -9,7 +8,6 @@ use chrono::{DateTime,Utc};
 use crate::schema;
 //use crate::view_schema;
 use crate::iron_diesel::{DieselReqExt, DieselMiddleware};
-use iron_cors::CorsMiddleware;
 
 use serde::Serialize;
 
@@ -86,14 +84,8 @@ pub fn web_main() {
     router.get("/votes/:id", motion_votes, "motion_votes");
     //router.get("/:query", handler, "query");
 
-    let allowed_hosts = ["consortium.chat"]
-        .iter()
-        .map(ToString::to_string)
-        .collect::<HashSet<_>>();
-
     let mut chain = Chain::new(router);
     chain.link_before(DieselMiddleware::new());
-    chain.link_around(CorsMiddleware::with_whitelist(allowed_hosts));
 
     let listen_address = std::env::var("LISTEN_ADDRESS").unwrap();
     println!("Listening on {}", listen_address);
