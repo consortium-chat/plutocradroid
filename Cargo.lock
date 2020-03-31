@@ -998,6 +998,8 @@ dependencies = [
  "ordinal",
  "regex 1.3.5",
  "router",
+ "serde",
+ "serde_json",
  "serenity",
 ]
 

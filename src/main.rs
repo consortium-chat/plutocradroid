@@ -9,6 +9,7 @@ extern crate maplit;
 mod schema;
 mod view_schema;
 mod damm;
+mod iron_diesel;
 
 mod bot;
 mod web;
