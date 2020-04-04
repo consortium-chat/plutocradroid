@@ -28,7 +28,7 @@ impl serenity::prelude::TypeMapKey for DbPoolKey {
 }
 
 #[group]
-#[commands(ping, give, balances, motion, supermotion, vote)]
+#[commands(ping, give, force_give, balances, motion, supermotion, vote)]
 struct General;
 
 #[group]
@@ -521,10 +521,21 @@ const GEN_NAMES:&'static [&'static str] = &["gen", "g", "generator", "generators
 #[command]
 #[min_args(2)]
 #[max_args(3)]
-fn give(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
+fn give(ctx:&mut Context, msg:&Message, args:Args) -> CommandResult {
+    give_common(ctx, msg, args, true)
+}
+
+#[command]
+#[min_args(2)]
+#[max_args(3)]
+fn force_give(ctx:&mut Context, msg:&Message, args:Args) -> CommandResult {
+    give_common(ctx, msg, args, false)
+}
+
+fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -> CommandResult {
     let user_str:String = args.single()?;
     let user = UserId::from_command_args( ctx, msg, &user_str )?;
-    if !ctx.cache.read().users.contains_key(&user) {
+    if check_user && !ctx.cache.read().users.contains_key(&user) {
         Err("User not found")?;
     }
     let mut ty:Option<ItemType> = None;
@@ -638,7 +649,6 @@ fn give(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
 
             Ok(())
         })?;
-        use serenity::model::misc::Mentionable;
         if let Some(fail_msg) = fail {
             msg.reply(&ctx, fail_msg)?;
         }else{

@@ -46,6 +46,16 @@ $give shelvacu#8719 100gen
 $give 165858230327574528 1 gens
 ```
 
+### Force give
+
+This is the same as `$give`, except that it DOES NOT CHECK IF THE USER EXISTS. While any name that can't be found still errors, if you specify a numerical user id, the bot will transfer regardless of whether that user exists. It is possible to "destroy" tokens this way, purposefully or accidentally.
+
+```text
+!!! DO NOT USE THIS UNLESS YOU KNOW WHAT YOU'RE DOING !!!
+$force_give 1 100 pc
+!!!
+```
+
 ### Balances
 
 ```text
