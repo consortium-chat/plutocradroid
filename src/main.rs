@@ -13,6 +13,7 @@ mod iron_diesel;
 
 mod bot;
 mod web;
+mod is_win;
 
 use std::env;
 
