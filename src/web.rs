@@ -24,6 +24,35 @@ struct Motion<'a> {
     pub announcement_message_id:Option<i64>,
 }
 
+#[derive(Clone,Debug,Serialize)]
+struct MotionWithCount<'a> {
+    pub rowid:i64,
+    pub bot_message_id:i64,
+    pub motion_text:Cow<'a, str>,
+    pub motioned_at:DateTime<Utc>,
+    pub last_result_change:DateTime<Utc>,
+    pub is_super:bool,
+    pub announcement_message_id:Option<i64>,
+    pub yes_vote_count:u64,
+    pub no_vote_count:u64,
+}
+
+impl<'a> MotionWithCount<'a>{
+    pub fn from_motion(m: Motion, yes_vote_count: u64, no_vote_count: u64) -> MotionWithCount {
+        MotionWithCount{
+            rowid: m.rowid,
+            bot_message_id: m.bot_message_id,
+            motion_text: m.motion_text,
+            motioned_at: m.motioned_at,
+            last_result_change: m.last_result_change,
+            is_super: m.is_super,
+            announcement_message_id: m.announcement_message_id,
+            yes_vote_count,
+            no_vote_count,
+        }
+    }
+}
+
 #[derive(Clone,Debug,Serialize,Queryable)]
 struct MotionVote {
     pub user:i64,
@@ -42,7 +71,8 @@ fn hello_world(_: &mut Request) -> IronResult<Response> {
 fn motions(req: &mut Request) -> IronResult<Response> {
     let conn = req.get_db_conn();
     use schema::motions::dsl as mdsl;
-    let res:Vec<Motion> = mdsl::motions.select((
+    use schema::motion_votes::dsl as mvdsl;
+    let bare_motions:Vec<Motion> = mdsl::motions.select((
         mdsl::rowid,
         mdsl::bot_message_id,
         mdsl::motion_text,
@@ -51,6 +81,22 @@ fn motions(req: &mut Request) -> IronResult<Response> {
         mdsl::is_super,
         mdsl::announcement_message_id,
     )).get_results(&*conn).unwrap();
+
+    let get_vote_count = |motion_id:i64, dir:bool| -> Result<i64, diesel::result::Error> {
+        use bigdecimal::{BigDecimal,ToPrimitive};
+        let votes:Option<BigDecimal> = mvdsl::motion_votes
+        .select(diesel::dsl::sum(mvdsl::amount))
+        .filter(mvdsl::motion.eq(motion_id))
+        .filter(mvdsl::direction.eq(dir))
+        .get_result(&*conn)?;
+        Ok(votes.map(|bd| bd.to_i64().unwrap()).unwrap_or(0))
+    };
+
+    let res = (bare_motions.into_iter().map(|m| {
+        let yes_votes = get_vote_count(m.rowid, true)?;
+        let no_votes = get_vote_count(m.rowid, false)?;
+        Ok(MotionWithCount::from_motion(m, yes_votes as u64, no_votes as u64))
+    }).collect():Result<Vec<_>,diesel::result::Error>).unwrap();
 
     Ok(Response::with((status::Ok, serde_json::to_string(&res).unwrap())))
 }
