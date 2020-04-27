@@ -35,6 +35,7 @@ struct MotionWithCount<'a> {
     pub announcement_message_id:Option<i64>,
     pub yes_vote_count:u64,
     pub no_vote_count:u64,
+    pub is_win:bool,
 }
 
 impl<'a> MotionWithCount<'a>{
@@ -49,6 +50,7 @@ impl<'a> MotionWithCount<'a>{
             announcement_message_id: m.announcement_message_id,
             yes_vote_count,
             no_vote_count,
+            is_win: crate::is_win::is_win(yes_vote_count as i64, no_vote_count as i64, m.is_super),
         }
     }
 }
