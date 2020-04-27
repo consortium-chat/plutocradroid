@@ -41,8 +41,7 @@ struct Handler;
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 enum SpecialEmojiAction {
-    Yes,
-    No,
+    Direction(bool),
     Amount(u64),
 }
 
@@ -58,8 +57,8 @@ lazy_static! {
         690487944552644639 => SpecialEmojiAction::Amount(100),
         690487968695058432 => SpecialEmojiAction::Amount(10),
         690487968523223051 => SpecialEmojiAction::Amount(1),
-        691352947820462121 => SpecialEmojiAction::Yes,
-        691352948072120380 => SpecialEmojiAction::No,
+        691352947820462121 => SpecialEmojiAction::Direction(true),
+        691352948072120380 => SpecialEmojiAction::Direction(false),
     };
 }
 
@@ -145,7 +144,7 @@ impl FromCommandArgs for UserId {
 impl EventHandler for Handler {
     fn reaction_add(&self, mut ctx: Context, r: serenity::model::channel::Reaction) {
         //dbg!(&r);
-        let mut vote_count = 1;
+        let mut vote_count = 0;
         let mut vote_direction = None;
         let user_id = r.user_id.clone();
         if user_id == ctx.cache.read().user.id {
@@ -155,8 +154,7 @@ impl EventHandler for Handler {
         if let serenity::model::channel::ReactionType::Custom{animated: _, id, name: _} = r.emoji {
             if let Some(action) = SPECIAL_EMOJI.get(&id.0) {
                 match action {
-                    SpecialEmojiAction::Yes => vote_direction = Some(true),
-                    SpecialEmojiAction::No => vote_direction = Some(false),
+                    SpecialEmojiAction::Direction(dir) => vote_direction = Some(*dir),
                     SpecialEmojiAction::Amount(a) => vote_count = *a,
                 }
                 let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get().unwrap();
@@ -399,9 +397,10 @@ fn update_motion_message(ctx: &mut Context, conn: &diesel::pg::PgConnection, msg
     }
     votes.sort_unstable_by_key(|v| -v.amount);
     let pass = is_win(yes_votes, no_votes, is_super);
+    let cap_label = if is_super { "Supermotion" } else { "Simple Motion" };
     msg.edit(&ctx, |m| {
         m.embed(|e| {
-            e.field("Motion", motion_text, false);
+            e.field(cap_label, motion_text, false);
             if pass {
                 e.field("Votes", format!("**for {}**/{} against", yes_votes, no_votes), false);
             } else {
@@ -738,13 +737,14 @@ fn motion_common(ctx:&mut Context, msg:&Message, args:Args, is_super: bool) -> C
 
         let motion_id:i64 = diesel::insert_into(schema::motion_ids::table).default_values().returning(schema::motion_ids::dsl::rowid).get_result(&*conn)?;
 
+        let cap_label = if is_super { "Supermotion" } else { "Simple Motion" };
         let bot_msg = serenity::model::id::ChannelId(MOTIONS_CHANNEL).send_message(&ctx, |m| {
             m.content(format!(
                 "A motion has been called by {}\n`$vote {}` to vote!",
                 msg.author.mention(),
                 damm::add_to_str(motion_id.to_string()),
             )).embed(|e| {
-                e.field("Motion", motion_text, false)
+                e.field(cap_label, motion_text, false)
                 .field("Votes", "**for 1**/0 against", false)
                 .field(msg.author.mention(), "1 for", true)
             })
@@ -785,7 +785,11 @@ fn motion_common(ctx:&mut Context, msg:&Message, args:Args, is_super: bool) -> C
     if let Some(mut motion_message) = motion_message_outer {
         update_motion_message(ctx, &*conn, &mut motion_message)?;
         let mut emojis:Vec<_> = (*SPECIAL_EMOJI).iter().collect();
-        emojis.sort_unstable_by_key(|(_,a)| match *a { SpecialEmojiAction::Yes => -1, SpecialEmojiAction::No => -1, SpecialEmojiAction::Amount(a) => (*a) as i64 });
+        emojis.sort_unstable_by_key(|(_,a)| match *a {
+            SpecialEmojiAction::Direction(false) => -2,
+            SpecialEmojiAction::Direction(true) => -1,
+            SpecialEmojiAction::Amount(a) => (*a) as i64
+        });
         for (emoji_id, _) in emojis {
             //dbg!(&emoji_id);
             serenity::model::id::ChannelId::from(MOTIONS_CHANNEL)
@@ -859,6 +863,7 @@ const NO_WORDS :&'static[&'static str] = &[
     "\u{1f196}",
     ":ng:",
 ];
+const ZERO_WORDS:&'static[&'static str] = &["zero", "zerovote", "nil", "nada", "nothing"];
 const IGNORE_WORDS:&'static[&'static str] = &["in", "i", "I", "think", "say", "fuck"];
 
 fn old_is_win(yes_votes:i64, no_votes:i64, is_super:bool) -> bool {
@@ -911,6 +916,8 @@ fn vote(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
                 vote_direction = Some(true);
             }else if NO_WORDS.contains(&&*arg) {
                 vote_direction = Some(false);
+            }else if ZERO_WORDS.contains(&&*arg) {
+                vote_count = 0;
             }else if IGNORE_WORDS.contains(&&*arg) {
                 //ignore
             }else {
