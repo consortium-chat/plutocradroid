@@ -28,7 +28,7 @@ impl serenity::prelude::TypeMapKey for DbPoolKey {
 }
 
 #[group]
-#[commands(ping, give, force_give, balances, motion, supermotion, vote)]
+#[commands(ping, give, force_give, balances, motion, supermotion, vote, hack_message_update)]
 struct General;
 
 #[group]
@@ -63,23 +63,24 @@ lazy_static! {
     };
 }
 
-#[cfg(debug)]
+#[cfg(feature = "debug")]
 lazy_static! {
     static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::seconds(30);
     static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::minutes(20);
 }
 
-#[cfg(not(debug))]
+#[cfg(not(feature = "debug"))]
 lazy_static! {
     static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::hours(24);
     static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::hours(48);
 }
 
 const VOTE_BASE_COST:u16 = 40;
-#[cfg(not(debug))]
+#[cfg(not(feature = "debug"))]
 const MOTIONS_CHANNEL:u64 = 609093491150028800; //bureaucracy channel
-#[cfg(debug)]
-const MOTIONS_CHANNEL:u64 = 560918427091468387; //spam channel
+#[cfg(feature = "debug")]
+const MOTIONS_CHANNEL:u64 = 610387757818183690; //test channel in shelvacuisawesomeserver
+//const MOTIONS_CHANNEL:u64 = 560918427091468387; //spam channel
 
 trait FromCommandArgs : Sized {
     fn from_command_args(ctx: &Context, msg: &Message, arg: &str) -> Result<Self, &'static str>;
@@ -191,7 +192,11 @@ pub fn bot_main() {
     lazy_static::initialize(&USER_PING_RE);
     lazy_static::initialize(&MOTION_EXPIRATION);
 
-    let pool = diesel::r2d2::Builder::new().build(diesel::r2d2::ConnectionManager::<diesel::PgConnection>::new(&env::var("DATABASE_URL").expect("DATABASE_URL expected"))).expect("could not build DB pool");
+    let pool = diesel::r2d2::Builder::new().build(
+        diesel::r2d2::ConnectionManager::<diesel::PgConnection>::new(
+            &env::var("DATABASE_URL").expect("DATABASE_URL expected")
+        )
+    ).expect("could not build DB pool");
     let arc_pool = Arc::new(pool);
 
     {
@@ -227,7 +232,7 @@ pub fn bot_main() {
         }
     });
     framework = framework.group(&GENERAL_GROUP);
-    #[cfg(debug)]
+    #[cfg(feature = "debug")]
     { framework = framework.group(&DEBUG_GROUP); }
     client.with_framework(framework);
 
@@ -313,6 +318,8 @@ pub fn bot_main() {
                 continue
             }
             eprintln!("Generating some political capital!");
+            let start_chrono = chrono::Utc::now();
+            let start_instant = std::time::Instant::now();
             conn.transaction::<_, diesel::result::Error, _>(|| {
                 diesel::sql_query("LOCK TABLE transfers IN EXCLUSIVE MODE;").execute(&*conn)?;
 
@@ -347,9 +354,20 @@ pub fn bot_main() {
                 
                 Ok(())
             }).unwrap();
+            let end_instant = std::time::Instant::now();
+            let end_chrono = chrono::Utc::now();
+            let chrono_dur = end_chrono - start_chrono;
+
+            eprintln!("PC generation took {} kernel seconds/{} RTC seconds", (end_instant - start_instant).as_secs_f64(), chrono_dur);
         }
     });
     drop(arc_pool);
+
+    #[cfg(not(feature = "debug"))]
+    println!("Prod mode.");
+
+    #[cfg(feature = "debug")]
+    println!("Debug mode.");
 
     // start listening for events by starting a single shard
     if let Err(why) = client.start() {
@@ -400,6 +418,15 @@ fn update_motion_message(ctx: &mut Context, conn: &diesel::pg::PgConnection, msg
         })
     }).unwrap();
     Ok(())
+}
+
+#[command]
+#[num_args(1)]
+fn hack_message_update(ctx: &mut Context, _msg: &Message, mut args: Args) -> CommandResult {
+    let motion_message_id:u64 = args.single()?;
+    let mut motion_message = ctx.http.get_message(MOTIONS_CHANNEL, motion_message_id)?;
+    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
+    update_motion_message(ctx, &*conn, &mut motion_message) 
 }
 
 #[command]
@@ -834,7 +861,7 @@ const NO_WORDS :&'static[&'static str] = &[
 ];
 const IGNORE_WORDS:&'static[&'static str] = &["in", "i", "I", "think", "say", "fuck"];
 
-fn is_win(yes_votes:i64, no_votes:i64, is_super:bool) -> bool {
+fn old_is_win(yes_votes:i64, no_votes:i64, is_super:bool) -> bool {
   if is_super {
       let total = yes_votes + no_votes;
       let div = total / 3;
@@ -851,6 +878,14 @@ fn is_win(yes_votes:i64, no_votes:i64, is_super:bool) -> bool {
   }else{
       return yes_votes > no_votes;
   }
+}
+
+fn is_win(yes_votes:i64, no_votes:i64, is_super:bool) -> bool {
+    if is_super {
+        return (yes_votes/2, yes_votes%2) > (no_votes, 0);
+    } else {
+        return yes_votes > no_votes;
+    }
 }
 
 #[command]
@@ -1102,4 +1137,17 @@ fn vote_common(
         ));
     }
     return Cow::Borrowed("Vote cast");
+}
+
+mod test {
+    #[test]
+    fn wins_match(){
+        use super::is_win;
+        use super::old_is_win;
+        assert_eq!(old_is_win(1, 0, false), is_win(1, 0, false));
+        assert_eq!(old_is_win(1, 1, false), is_win(1, 1, false));
+        assert_eq!(old_is_win(1, 2, false), is_win(1, 2, false));
+        assert_eq!(old_is_win(2, 1, true),  is_win(2, 1, true));
+        assert_eq!(old_is_win(3, 1, true),  is_win(3, 1, true));
+    }
 }

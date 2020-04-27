@@ -53,6 +53,7 @@ table! {
         message_id -> Nullable<Int8>,
         to_motion -> Nullable<Int8>,
         to_votes -> Nullable<Int8>,
+        comment -> Nullable<Text>,
     }
 }
 
