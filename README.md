@@ -104,10 +104,10 @@ $vote 123
 
 Not the prettiest, but should still be more convenient than voting with the `$vote` command. On every motion, the bot reacts with certain emoji.
 
-Clicking the "yes" or "no" emoji casts ONE vote in the given direction. Any problems are PM'd to you.
+Clicking the "yes" or "no" emoji picks which direction you'd like to vote, however this is a "zero vote" and costs nothing (previously, this would cast one vote). This cannot be changed. Any problems are PM'd to you.
 
 Clicking any of the numbers casts that number of votes. If you have not previously specified a direction in a previous `$vote` command or click on the "yes" or "no" emoji, this will not work. Any problems are PM'd to you.
 
 You cannot retract votes. Un-reacting does nothing except allow you to react again, voting that many more times.
 
-Generally, you'll want to click "yes" or "no" and then as many numbers as you like. The numbers are chosen such that any number of votes from 0 to 200 can be cast purely from the reactions, without un-reacting.
+Generally, you'll want to click "yes" or "no" and then as many numbers as you like. The numbers are chosen such that any number of votes from 0 to 199 can be cast purely from the reactions, without un-reacting.
