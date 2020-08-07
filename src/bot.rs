@@ -4,6 +4,7 @@ use crate::damm;
 
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 use serenity::client::Client;
 use serenity::model::misc::Mentionable;
 use serenity::model::channel::Message;
@@ -245,6 +246,7 @@ pub fn bot_main() {
         let conn = announce_threads_conn;
         
         loop {
+            std::thread::sleep(Duration::from_millis(500));
             let now = chrono::Utc::now();
             let motions:Vec<(String, i64, bool)> = mdsl::motions
                 .filter(mdsl::announcement_message_id.is_null())
@@ -311,6 +313,7 @@ pub fn bot_main() {
 
         loop {
             /* not properly locking, but should only have one thread trying to access */
+            std::thread::sleep(Duration::from_millis(500));
             let now = chrono::Utc::now();
             let last_gen:chrono::DateTime<chrono::Utc> = sdsl::single.select(sdsl::last_gen).get_result(&*conn).unwrap();
             if now - last_gen < *GENERATE_EVERY {
