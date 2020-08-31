@@ -7,5 +7,7 @@ table! {
         sign -> Int4,
         happened_at -> Timestamptz,
         ty -> Text,
+        comment -> Nullable<Text>,
+        other_party -> Nullable<Int8>,
     }
 }

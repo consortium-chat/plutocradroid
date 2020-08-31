@@ -22,6 +22,7 @@ use serenity::framework::standard::{
 use regex::Regex;
 
 use diesel::connection::Connection;
+use serde::Serialize;
 
 use crate::is_win::is_win;
 
@@ -32,6 +33,7 @@ impl serenity::prelude::TypeMapKey for DbPoolKey {
 
 #[group]
 #[commands(ping, give, force_give, balances, motion, supermotion, vote, hack_message_update)]
+#[cfg_attr(feature = "debug", commands(transaction_history_csv))]
 struct General;
 
 #[group]
@@ -701,6 +703,75 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
         }
     }
     
+    Ok(())
+}
+
+#[cfg(feature = "debug")]
+#[command]
+#[aliases("history_csv")]
+fn transaction_history_csv(ctx:&mut Context, msg:&Message, _args:Args) -> CommandResult {
+    use diesel::prelude::*;
+    use view_schema::balance_history::dsl as bhdsl;
+    #[derive(Debug,Queryable)]
+    struct DbTransaction{
+        pub balance:i64,
+        pub quantity:i64,
+        pub sign:i32,
+        pub happened_at:chrono::DateTime<chrono::Utc>,
+        pub ty:String,
+        pub comment:Option<String>,
+        pub other_party:Option<i64>,
+    }
+    #[derive(Debug,Serialize)]
+    struct CsvTransaction{
+        pub ty:String,
+        pub happened_at:String,
+        pub other_party:String,
+        pub amount:String,
+        pub balance_after:String,
+        pub comment:String,
+    }
+    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
+    let history:Vec<DbTransaction> = bhdsl::balance_history.select((
+        bhdsl::balance,
+        bhdsl::quantity,
+        bhdsl::sign,
+        bhdsl::happened_at,
+        bhdsl::ty,
+        bhdsl::comment,
+        bhdsl::other_party,
+    ))
+    .filter(bhdsl::user.eq(msg.author.id.0 as i64))
+    .order(bhdsl::happened_at.desc())
+    .get_results(&*conn)
+    .unwrap();
+
+    let mut wtr = csv::Writer::from_writer(vec![]);
+    for tn in history {
+        let other_party_id:Option<i64> = tn.other_party;
+        let mut other_party:String = other_party_id.map(|id| id.to_string()).unwrap_or(String::new());
+        other_party.push_str(":");
+        let other_party_tag = other_party_id.map(|id| ctx.cache.read().users.get(&UserId::from(id as u64)).map(|a| a.read().tag())).flatten();
+        if let Some(s) = other_party_tag {
+            other_party.push_str(&s);
+        }
+        let csv_thing = CsvTransaction{
+            ty: tn.ty,
+            happened_at: tn.happened_at.to_rfc3339(),
+            other_party,
+            amount: (tn.quantity * (tn.sign as i64)).to_string(),
+            balance_after: tn.balance.to_string(),
+            comment: tn.comment.unwrap_or(String::new()),
+        };
+        wtr.serialize(csv_thing).unwrap();
+    }
+
+    let csv_data = wtr.into_inner().unwrap();
+
+    msg.channel_id.send_message(&ctx, |m| {
+        m.add_file((csv_data.as_slice(), "transactions.csv"))
+    })?;
+
     Ok(())
 }
 
