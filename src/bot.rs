@@ -1030,6 +1030,7 @@ pub fn vote_common(
     let mut outer_motion_id:Option<i64> = None;
     let mut outer_vote_ordinal_start:Option<i64> = None;
     let mut outer_vote_ordinal_end:Option<i64> = None;
+    let mut outer_direction:Option<bool> = None;
     let txn_res = conn.transaction::<_, diesel::result::Error, _>(|| {
         use diesel::prelude::*;
         use schema::motions::dsl as mdsl;
@@ -1100,6 +1101,7 @@ pub fn vote_common(
                     voted_so_far = vote_res.1;
                     outer_dir = vote_res.0;
                 }
+                outer_direction = Some(outer_dir);
 
                 //dbg!(&voted_so_far, &outer_dir, &vote_count);
                 let mut cost = 0;
@@ -1198,13 +1200,18 @@ pub fn vote_common(
         return Cow::Borrowed(msg);
     }
     txn_res.unwrap();
-    if let (Some(cost), Some(motion_id), Some(ordinal_start), Some(ordinal_end)) = (outer_cost, outer_motion_id, outer_vote_ordinal_start, outer_vote_ordinal_end) {
+    if let (Some(cost), Some(motion_id), Some(ordinal_start), Some(ordinal_end), Some(direction)) = (outer_cost, outer_motion_id, outer_vote_ordinal_start, outer_vote_ordinal_end, outer_direction) {
+        let ordinal_text = if vote_count > 1 {
+            format!(", {} to {} vote", ordinal::Ordinal(ordinal_start), ordinal::Ordinal(ordinal_end-1))
+        } else if vote_count == 1 {
+            format!(", {} vote", ordinal::Ordinal(ordinal_start))
+        } else { String::new() };
         return Cow::Owned(format!(
-            "Voted on motion #{} {} times, {} to {}, costing {} capital",
-            motion_id,
+            "Voted {} times {} motion #{}{}, costing {} capital",
             vote_count,
-            ordinal::Ordinal(ordinal_start),
-            ordinal::Ordinal(ordinal_end),
+            if direction { "for" } else { "against" },
+            damm::add_to_str(motion_id.to_string()),
+            ordinal_text,
             cost,
         ));
     }

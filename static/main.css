@@ -1,0 +1,8 @@
+/* adapted from https://jrl.ninja/etc/1/ */
+html {
+    max-width:70ch;
+    padding:2ch;
+    margin:auto;
+    color:#333;
+    font-size:1.2em;
+}

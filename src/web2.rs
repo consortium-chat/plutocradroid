@@ -7,6 +7,7 @@ use rocket::http::{Cookies, Cookie, SameSite};
 use rocket::response::{Responder, Redirect};
 use rocket::request::{FromRequest,Request,Outcome};
 use rocket::request::LenientForm;
+use rocket_contrib::serve::StaticFiles;
 use maud::{html, Markup};
 use diesel::prelude::*;
 
@@ -411,6 +412,7 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
 
     Some(page(&mut ctx, format!("Motion#{}", motion.damm_id()), html!{
         div.motion {
+            a href="/" { "Home" }
             a href=(format!("/motions/{}", motion.damm_id())) {
                 h3 { "Motion #" (motion.damm_id())}
             }
@@ -618,5 +620,6 @@ pub fn main() {
         .manage(rocket_diesel::init_pool())
         .attach(OAuth2::<DiscordOauth>::fairing("discord"))
         .mount("/",routes![index, oauth_finish, login, cookies, discord_data, get_deets, motion_listing, motion_vote])
+        .mount("/static", StaticFiles::from("static"))
         .launch();
 }
