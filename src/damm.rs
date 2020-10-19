@@ -17,6 +17,8 @@ fn operation(top:usize, left:usize) -> u8 {
     OPERATION_TABLE[left * 10 + top]
 }
 
+/// Given a slice of ASCII digits, what should the check digit be (single ASCII char)
+/// Panics on non-ascii char in input
 pub fn check_digit(input:&[u8]) -> u8 {
     let mut res = 0u8;
     for digit in input {
@@ -28,6 +30,7 @@ pub fn check_digit(input:&[u8]) -> u8 {
     return res;
 }
 
+/// Given a string-like, return a string with the check digit appended
 pub fn add_to_str<S: Into<String>>(s:S) -> String {
     let mut strr:String = s.into();
     let mut digits:Vec<u8> = Vec::new();
@@ -43,6 +46,9 @@ pub fn add_to_str<S: Into<String>>(s:S) -> String {
     return strr;
 }
 
+/// Validates that a string is a valid damm number.
+/// If the number is valid, returns Some(Vec<u8>), where the vec is the digits (0-9, NOT ascii) sans check digit
+/// If the number is invalid, returns None
 pub fn validate(s:&str) -> Option<Vec<u8>> {
     let mut digits:Vec<u8> = Vec::with_capacity(s.len());
     for c in s.chars() {
@@ -55,6 +61,25 @@ pub fn validate(s:&str) -> Option<Vec<u8>> {
     if check_digit(&digits) == 0 {
         digits.pop();
         return Some(digits);
+    } else {
+        return None;
+    }
+}
+
+pub fn validate_ascii(s:&str) -> Option<Vec<u8>> {
+    let mut low_digits:Vec<u8> = Vec::with_capacity(s.len());
+    let mut ascii_digits:Vec<u8> = Vec::with_capacity(s.len());
+    for c in s.chars() {
+        if '0' <= c && c <= '9' {
+            low_digits.push(((c as u32) - ('0' as u32)) as u8);
+            ascii_digits.push(c as u8);
+        }else{
+            return None;
+        }
+    }
+    if check_digit(&low_digits) == 0 {
+        ascii_digits.pop();
+        return Some(ascii_digits);
     } else {
         return None;
     }

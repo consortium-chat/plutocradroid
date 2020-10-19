@@ -1,14 +1,18 @@
-#![feature(type_ascription, proc_macro_hygiene, decl_macro)]
+#![feature(type_ascription, proc_macro_hygiene, decl_macro, never_type)]
 
+#[macro_use] extern crate log;
 #[macro_use] extern crate rocket;
 #[macro_use] extern crate diesel;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate maplit;
+#[macro_use] extern crate serde;
 
+mod models;
 mod schema;
 mod view_schema;
 mod damm;
 mod iron_diesel;
+mod rocket_diesel;
 
 mod bot;
 mod web;

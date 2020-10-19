@@ -20,6 +20,7 @@ table! {
         last_result_change -> Timestamptz,
         is_super -> Bool,
         announcement_message_id -> Nullable<Int8>,
+        needs_update -> Bool,
     }
 }
 

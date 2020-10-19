@@ -22,7 +22,6 @@ use serenity::framework::standard::{
 use regex::Regex;
 
 use diesel::connection::Connection;
-use serde::Serialize;
 
 use crate::is_win::is_win;
 
@@ -33,7 +32,7 @@ impl serenity::prelude::TypeMapKey for DbPoolKey {
 
 #[group]
 #[commands(ping, give, force_give, balances, motion, supermotion, vote, hack_message_update)]
-#[cfg_attr(feature = "debug", commands(transaction_history_csv))]
+//#[cfg_attr(feature = "debug", commands(transaction_history_csv))]
 struct General;
 
 #[group]
@@ -147,7 +146,7 @@ impl FromCommandArgs for UserId {
 }
 
 impl EventHandler for Handler {
-    fn reaction_add(&self, mut ctx: Context, r: serenity::model::channel::Reaction) {
+    fn reaction_add(&self, ctx: Context, r: serenity::model::channel::Reaction) {
         //dbg!(&r);
         let mut vote_count = 0;
         let mut vote_direction = None;
@@ -164,7 +163,6 @@ impl EventHandler for Handler {
                 }
                 let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get().unwrap();
                 let resp = vote_common(
-                    &mut ctx,
                     &*conn,
                     vote_direction,
                     vote_count as i64,
@@ -236,7 +234,7 @@ pub fn bot_main() {
     });
     framework = framework.group(&GENERAL_GROUP);
     #[cfg(feature = "debug")]
-    { framework = framework.group(&DEBUG_GROUP); }
+    { framework = framework.group(&GENERAL_GROUP).group(&DEBUG_GROUP); }
     client.with_framework(framework);
 
     let cnh = Arc::clone(&client.cache_and_http);
@@ -301,6 +299,18 @@ pub fn bot_main() {
                     mdsl::announcement_message_id.eq(announce_msg.id.0 as i64)
                 ).execute(&*conn).unwrap();
             }
+
+            let mmids:Vec<i64> = mdsl::motions
+                .filter(mdsl::announcement_message_id.is_null())
+                .filter(mdsl::needs_update)
+                .select(mdsl::bot_message_id)
+                .get_results(&*conn)
+                .unwrap();
+            for mmid in &mmids {
+                let mut motion_message = cnh.http.get_message(MOTIONS_CHANNEL, *mmid as u64).unwrap();
+                update_motion_message(Arc::clone(&cnh.http), &*conn, &mut motion_message).unwrap(); 
+            }
+
         }
     });
 
@@ -380,7 +390,11 @@ pub fn bot_main() {
     }
 }
 
-fn update_motion_message(ctx: &mut Context, conn: &diesel::pg::PgConnection, msg: &mut serenity::model::channel::Message) -> CommandResult {
+fn update_motion_message(
+    ctx: impl serenity::http::CacheHttp,
+    conn: &diesel::pg::PgConnection,
+    msg: &mut serenity::model::channel::Message
+) -> CommandResult {
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
     use diesel::prelude::*;
@@ -405,7 +419,7 @@ fn update_motion_message(ctx: &mut Context, conn: &diesel::pg::PgConnection, msg
     votes.sort_unstable_by_key(|v| -v.amount);
     let pass = is_win(yes_votes, no_votes, is_super);
     let cap_label = if is_super { "Supermotion" } else { "Simple Motion" };
-    msg.edit(&ctx, |m| {
+    msg.edit(ctx, |m| {
         m.embed(|e| {
             e.field(cap_label, motion_text, false);
             if pass {
@@ -423,6 +437,8 @@ fn update_motion_message(ctx: &mut Context, conn: &diesel::pg::PgConnection, msg
             e
         })
     }).unwrap();
+    let target = mdsl::motions.filter(mdsl::bot_message_id.eq(msg.id.0 as i64));
+    diesel::update(target).set(mdsl::needs_update.eq(true)).execute(conn).unwrap();
     Ok(())
 }
 
@@ -859,7 +875,7 @@ fn motion_common(ctx:&mut Context, msg:&Message, args:Args, is_super: bool) -> C
 
     //let mut motion_message = ctx.http.get_message(MOTIONS_CHANNEL, motion_id_outer.unwrap() as u64)?;
     if let Some(mut motion_message) = motion_message_outer {
-        update_motion_message(ctx, &*conn, &mut motion_message)?;
+        update_motion_message(&ctx, &*conn, &mut motion_message)?;
         let mut emojis:Vec<_> = (*SPECIAL_EMOJI).iter().collect();
         emojis.sort_unstable_by_key(|(_,a)| match *a {
             SpecialEmojiAction::Direction(false) => -2,
@@ -980,7 +996,6 @@ fn vote(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
 
         let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
         let response = vote_common(
-            ctx,
             &*conn,
             vote_direction,
             vote_count,
@@ -1000,8 +1015,8 @@ fn vote(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
 
 use std::borrow::Cow;
 
-fn vote_common(
-    ctx: &mut Context,
+pub fn vote_common(
+    //ctx: &mut Context,
     conn: &diesel::PgConnection,
     vote_direction:Option<bool>,
     vote_count:i64,
@@ -1030,7 +1045,7 @@ fn vote_common(
         .optional()?;
         //dbg!(&res);
 
-        if let Some((motion_id, not_announced, is_super, motion_message_id)) = res {
+        if let Some((motion_id, not_announced, is_super, _motion_message_id)) = res {
             outer_motion_id = Some(motion_id);
             if not_announced {
                 //dbg!();
@@ -1165,8 +1180,9 @@ fn vote_common(
                 }
                 //dbg!();
 
-                let mut motion_message = ctx.http.get_message(MOTIONS_CHANNEL, motion_message_id as u64).unwrap();
-                update_motion_message(ctx, &*conn, &mut motion_message).unwrap(); 
+                // let mut motion_message = ctx.http.get_message(MOTIONS_CHANNEL, motion_message_id as u64).unwrap();
+                // update_motion_message(ctx, &*conn, &mut motion_message).unwrap(); 
+                diesel::update(mdsl::motions.filter(mdsl::rowid.eq(motion_id))).set(mdsl::needs_update.eq(true)).execute(&*conn).unwrap();
             }else{
                 fail = Some("Motion has expired.");
                 return Err(diesel::result::Error::RollbackTransaction);

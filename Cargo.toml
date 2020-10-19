@@ -22,7 +22,13 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 csv = "1.1"
 rocket = "0.4.5"
-oauth2 = "3.0.0"
+rocket_oauth2 = "0.4.1"
+log = "0.4.11"
+reqwest = "0.10.8"
+rand = "0.7.3"
+base64 = "0.13.0"
+maud = { version = "*", features = ["rocket"] }
+atoi = "0.3.2"
 
 [features]
 debug = []
