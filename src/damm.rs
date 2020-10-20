@@ -27,7 +27,7 @@ pub fn check_digit(input:&[u8]) -> u8 {
         }
         res = operation(*digit as usize, res as usize);
     }
-    return res;
+    res
 }
 
 /// Given a string-like, return a string with the check digit appended
@@ -42,8 +42,8 @@ pub fn add_to_str<S: Into<String>>(s:S) -> String {
         }
     }
     let cd = check_digit(&digits);
-    strr.push((('0' as u8) + (cd as u8)) as char);
-    return strr;
+    strr.push((b'0' + (cd as u8)) as char);
+    strr
 }
 
 /// Validates that a string is a valid damm number.
@@ -60,9 +60,9 @@ pub fn validate(s:&str) -> Option<Vec<u8>> {
     }
     if check_digit(&digits) == 0 {
         digits.pop();
-        return Some(digits);
+        Some(digits)
     } else {
-        return None;
+        None
     }
 }
 
@@ -79,8 +79,8 @@ pub fn validate_ascii(s:&str) -> Option<Vec<u8>> {
     }
     if check_digit(&low_digits) == 0 {
         ascii_digits.pop();
-        return Some(ascii_digits);
+        Some(ascii_digits)
     } else {
-        return None;
+        None
     }
 }

@@ -41,6 +41,6 @@ impl <'a, 'b>DieselReqExt for Request <'a, 'b> {
 	fn get_db_conn(&self) -> DieselConnection {
 		let pool = self.extensions.get::<DieselMiddleware>().unwrap();
 
-		return pool.get().expect("Failed to get a db connection");
+		pool.get().expect("Failed to get a db connection")
 	}
 }

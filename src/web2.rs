@@ -129,8 +129,8 @@ impl From<DeetsFail> for CommonContextError {
 }
 
 impl From<()> for CommonContextError {
-    fn from(d: ()) -> Self {
-        CommonContextError::DbConnError(d)
+    fn from(_: ()) -> Self {
+        CommonContextError::DbConnError(())
     }
 }
 
@@ -171,7 +171,7 @@ impl <'a, 'r> FromRequest<'a, 'r> for CommonContext<'a> {
             None => None,
         };
 
-        let conn = rocket_diesel::DbConn::from_request(request).map_failure(|(a,b)| (a, CommonContextError::from(b)))?;
+        let conn = rocket_diesel::DbConn::from_request(request).map_failure(|(a,_)| (a, CommonContextError::from(())))?;
         Outcome::Success(Self{
             csrf_token,
             cookies,

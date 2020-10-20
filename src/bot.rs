@@ -127,7 +127,7 @@ impl FromCommandArgs for UserId {
             }
         }
 
-        for (_id, guild_lock) in &ctx.cache.read().guilds {
+        for guild_lock in ctx.cache.read().guilds.values() {
             let guild = guild_lock.read();
             for member in guild.members.values() {
                 if let Some(nick) = member.nick.as_ref() {
@@ -150,11 +150,11 @@ impl EventHandler for Handler {
         //dbg!(&r);
         let mut vote_count = 0;
         let mut vote_direction = None;
-        let user_id = r.user_id.clone();
+        let user_id = r.user_id;
         if user_id == ctx.cache.read().user.id {
             return;
         }
-        let message_id = r.message_id.clone();
+        let message_id = r.message_id;
         if let serenity::model::channel::ReactionType::Custom{animated: _, id, name: _} = r.emoji {
             if let Some(action) = SPECIAL_EMOJI.get(&id.0) {
                 match action {
@@ -179,12 +179,10 @@ impl EventHandler for Handler {
 
 fn nth_vote_cost(n:i64) -> Result<i64,()> {
     let res:f64 = (VOTE_BASE_COST as f64) * (1.05f64).powf((n-1) as f64);
-    if res < 0.0 {
-        return Err(())
-    } else if res > 4611686018427388000.0 {
-        return Err(())
+    if res < 0.0 || res > 4611686018427388000.0 {
+        Err(())
     } else {
-        return Ok(res as i64);
+        Ok(res as i64)
     }
 }
 
@@ -472,7 +470,7 @@ fn fabricate(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult 
     }
     let how_many:i64 = args.single()?;
     if how_many <= 0 {
-        Err("fuck")?;
+        return Err("fuck".into());
     }
     let user:UserId;
     if args.remaining() > 0 {
@@ -564,8 +562,8 @@ impl ItemType {
     }
 }
 
-const PC_NAMES :&'static [&'static str] = &["pc","politicalcapital","political-capital","capital"];
-const GEN_NAMES:&'static [&'static str] = &["gen", "g", "generator", "generators", "gens"];
+const PC_NAMES :&[&str] = &["pc","politicalcapital","political-capital","capital"];
+const GEN_NAMES:&[&str] = &["gen", "g", "generator", "generators", "gens"];
 
 #[command]
 #[min_args(2)]
@@ -585,7 +583,7 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
     let user_str:String = args.single()?;
     let user = UserId::from_command_args( ctx, msg, &user_str )?;
     if check_user && !ctx.cache.read().users.contains_key(&user) {
-        Err("User not found")?;
+        return Err("User not found".into());
     }
     let mut ty:Option<ItemType> = None;
     let mut amount:Option<u64> = None;
@@ -595,28 +593,26 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
             ty = Some(ItemType::PoliticalCapital);
         } else if GEN_NAMES.contains(&&*arg) {
             ty = Some(ItemType::Generator);
-        } else {
-            if let Some(idx) = arg.find(|c| !('0' <= c && c <= '9')) {
-                if idx == 0 {
-                    Err(format!("Invalid item type {}", arg))?;
-                }
-                let (count_str, ty_str) = arg.split_at(idx);
-                if PC_NAMES.contains(&ty_str) {
-                    ty = Some(ItemType::PoliticalCapital);
-                } else if GEN_NAMES.contains(&ty_str) {
-                    ty = Some(ItemType::Generator);
-                } else {
-                    Err(format!("Unrecognized item type {}", ty_str))?;
-                }
-                match count_str.parse():Result<u64,_> {
-                    Err(e) => {Err(format!("Bad count {:?}", e))?;},
-                    Ok(val) => {amount = Some(val);},
-                }
-            }else{
-                match arg.parse():Result<u64, _> {
-                    Err(e) => {Err(format!("Bad count {:?}", e))?;},
-                    Ok(val) => {amount = Some(val);},
-                }
+        } else if let Some(idx) = arg.find(|c| !('0' <= c && c <= '9')) {
+            if idx == 0 {
+                return Err(format!("Invalid item type {}", arg).into());
+            }
+            let (count_str, ty_str) = arg.split_at(idx);
+            if PC_NAMES.contains(&ty_str) {
+                ty = Some(ItemType::PoliticalCapital);
+            } else if GEN_NAMES.contains(&ty_str) {
+                ty = Some(ItemType::Generator);
+            } else {
+                return Err(format!("Unrecognized item type {}", ty_str).into());
+            }
+            match count_str.parse():Result<u64,_> {
+                Err(e) => return Err(format!("Bad count {:?}", e).into()),
+                Ok(val) => amount = Some(val),
+            }
+        }else{
+            match arg.parse():Result<u64, _> {
+                Err(e) => return Err(format!("Bad count {:?}", e).into()),
+                Ok(val) => amount = Some(val),
             }
         }
     }
@@ -711,12 +707,10 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
                 user.mention()
             ))?;
         }
+    } else if amount.is_none() {
+        return Err("Amount not provided.".into());
     } else {
-        if amount.is_none() {
-            Err(format!("Amount not provided."))?;
-        } else {
-            Err(format!("Type not provided."))?;
-        }
+        return Err("Type not provided.".into());
     }
     
     Ok(())
@@ -902,7 +896,7 @@ fn motion_common(ctx:&mut Context, msg:&Message, args:Args, is_super: bool) -> C
     Ok(())
 }
 
-const YES_WORDS:&'static[&'static str] = &[
+const YES_WORDS:&[&str] = &[
     "favor", 
     "for", 
     "approve", 
@@ -925,7 +919,7 @@ const YES_WORDS:&'static[&'static str] = &[
     "\u{2705}",
     "pass",
 ];
-const NO_WORDS :&'static[&'static str] = &[
+const NO_WORDS :&[&str] = &[
     "neigh",
     "fail",
     "no", //no in sardinian
@@ -955,8 +949,8 @@ const NO_WORDS :&'static[&'static str] = &[
     "\u{1f196}",
     ":ng:",
 ];
-const ZERO_WORDS:&'static[&'static str] = &["zero", "zerovote", "nil", "nada", "nothing"];
-const IGNORE_WORDS:&'static[&'static str] = &["in", "i", "I", "think", "say", "fuck"];
+const ZERO_WORDS:&[&str] = &["zero", "zerovote", "nil", "nada", "nothing"];
+const IGNORE_WORDS:&[&str] = &["in", "i", "I", "think", "say", "fuck"];
 
 #[command]
 #[min_args(1)]
@@ -1008,7 +1002,7 @@ fn vote(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
         
         //msg.reply(&ctx, "Vote counted!").unwrap();
     }else{
-        Err("Invalid motion id, please try again.")?;
+        return Err("Invalid motion id, please try again.".into());
     }
     Ok(())
 }
@@ -1218,6 +1212,7 @@ pub fn vote_common(
     }
     txn_res.unwrap();
     if let (Some(cost), Some(motion_id), Some(ordinal_start), Some(ordinal_end), Some(direction)) = (outer_cost, outer_motion_id, outer_vote_ordinal_start, outer_vote_ordinal_end, outer_direction) {
+        #[allow(clippy::comparison_chain)]
         let ordinal_text = if vote_count > 1 {
             format!(", {} to {} vote", ordinal::Ordinal(ordinal_start), ordinal::Ordinal(ordinal_end-1))
         } else if vote_count == 1 {
@@ -1232,5 +1227,5 @@ pub fn vote_common(
             cost,
         ));
     }
-    return Cow::Borrowed("Vote cast");
+    Cow::Borrowed("Vote cast")
 }
