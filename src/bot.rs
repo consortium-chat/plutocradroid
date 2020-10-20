@@ -1104,11 +1104,28 @@ pub fn vote_common(
                 outer_direction = Some(outer_dir);
 
                 //dbg!(&voted_so_far, &outer_dir, &vote_count);
-                let mut cost = 0;
+                let mut cost:i64 = 0;
                 outer_vote_ordinal_start = Some(voted_so_far + 1);
-                outer_vote_ordinal_end = Some(voted_so_far + vote_count + 1); 
+                outer_vote_ordinal_end = Some(voted_so_far + vote_count + 1);
+                let mut do_fail = false;
                 for nth in voted_so_far+1..voted_so_far+vote_count+1 {
-                    cost += nth_vote_cost(nth).unwrap();
+                    //effectively:
+                    //cost += nth_vote_cost(nth).unwrap();
+                    if let Ok(this_vote_cost) = nth_vote_cost(nth) {
+                        if let Some(new_total_cost) = cost.checked_add(this_vote_cost) {
+                            cost = new_total_cost
+                        } else {
+                            do_fail = true;
+                            break;
+                        }
+                    } else {
+                        do_fail = true;
+                        break;
+                    }
+                }
+                if do_fail {
+                    fail = Some("Integer overflow, no way you have that much pc");
+                    return Err(diesel::result::Error::RollbackTransaction);
                 }
                 //dbg!(&cost);
                 outer_cost = Some(cost);

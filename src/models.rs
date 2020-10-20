@@ -27,6 +27,7 @@ pub struct MotionWithCount<'a> {
 }
 
 impl<'a> Motion<'a> {
+    #[allow(dead_code)]
     pub fn damm_id(&self) -> String {
         crate::damm::add_to_str(format!("{}",self.rowid))
     }

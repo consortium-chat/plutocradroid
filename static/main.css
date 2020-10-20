@@ -6,3 +6,8 @@ html {
     color:#333;
     font-size:1.2em;
 }
+
+.winner {
+    font-weight: bolder;
+    font-size: 120%;
+}

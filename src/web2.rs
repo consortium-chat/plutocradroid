@@ -1,7 +1,5 @@
 use std::fmt::Display;
 use std::fmt;
-//use rocket::Rocket;
-//use rocket::fairing::AdHoc;
 use rocket_oauth2::{OAuth2, TokenResponse};
 use rocket::http::{Cookies, Cookie, SameSite};
 use rocket::response::{Responder, Redirect};
@@ -13,8 +11,6 @@ use diesel::prelude::*;
 
 use crate::{schema, rocket_diesel};
 use crate::models::{Motion, MotionVote, MotionWithCount};
-
-//const DISCORD_OAUTH_URL:&'static str = "https://discord.com/api/oauth2/authorize?client_id=698996983305863178&redirect_uri=https%3A%2F%2Fpluto-test.shelvacu.com%2Foauth-finish&response_type=code&scope=identify";
 
 fn generate_state<A: rand::RngCore + rand::CryptoRng>(rng: &mut A) -> Result<String, String> {
     let mut buf = [0; 16]; // 128 bits
@@ -28,12 +24,6 @@ struct DiscordOauth;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CSRFToken(pub String);
-
-#[derive(Debug, Clone, Copy)]
-struct CSRFVerify;
-
-#[derive(Debug, Clone, Copy)]
-struct CSRFInvalid;
 
 #[derive(Debug, Clone, FromForm)]
 struct CSRFForm {
@@ -91,7 +81,7 @@ struct Deets {
 
 #[derive(Debug)]
 enum DeetsFail {
-    BadDeets(Box<dyn std::error::Error>),
+    BadDeets(serde_json::error::Error),
     NoDeets
 }
 
@@ -103,7 +93,7 @@ impl <'a, 'r> FromRequest<'a, 'r> for Deets {
         //let maybe_deets = c.get("deets");
         match c.get_private("deets").map(|c| serde_json::from_str(c.value()):Result<Self,_>) {
             Some(Ok(deets)) => Outcome::Success(deets),
-            Some(Err(e)) => Outcome::Failure((rocket::http::Status::BadRequest,DeetsFail::BadDeets(Box::new(e)))),
+            Some(Err(e)) => Outcome::Failure((rocket::http::Status::BadRequest,DeetsFail::BadDeets(e))),
             None => Outcome::Failure((rocket::http::Status::Unauthorized,DeetsFail::NoDeets)),
         }
     }
@@ -126,34 +116,8 @@ impl <'a, 'r> FromRequest<'a, 'r> for CSRFToken {
     }
 }
 
-impl <'a, 'r> FromRequest<'a, 'r> for CSRFVerify {
-    type Error = CSRFInvalid;
-
-    fn from_request(request: &'a Request<'r>) -> Outcome<Self, Self::Error> {
-        let c = request.cookies();
-        let maybe_token = c.get("csrf_protection_token");
-        match maybe_token {
-            Some(token) => {
-                if request.get_query_value("csrf") == Some(Ok(token.value().to_string())) {
-                    return Outcome::Success(Self);
-                }
-                if request.headers().get_one("X-CSRF-PROTECTION") == Some(token.value()) {
-                    return Outcome::Success(Self);
-                }
-                return Outcome::Failure((rocket::http::Status::BadRequest,CSRFInvalid));
-            },
-            None => {
-                info!("CSRF validation failed, no CSRF cookie");
-                Outcome::Failure((rocket::http::Status::BadRequest,CSRFInvalid))
-            },
-        }
-    }
-}
-
 #[derive(Debug)]
 enum CommonContextError {
-    //CSRFTokenError(<CSRFToken as FromRequest<'a, 'r>>::Error),
-    //CookiesError(<Cookies<'c> as FromRequest<'a, 'r>>::Error),
     DeetsError(DeetsFail),
     DbConnError(()),
 }
@@ -189,11 +153,6 @@ impl <'a, 'r> FromRequest<'a, 'r> for CommonContext<'a> {
     type Error = CommonContextError;
 
     fn from_request(request: &'a Request<'r>) -> Outcome<Self, Self::Error> {
-        // let csrf_token =       CSRFToken::from_request(request).map_failure(|(a,b)| (a, CommonContextError::from(b)))?;
-        // let cookies =            Cookies::from_request(request).map_failure(|(a,b)| (a, CommonContextError::from(b)))?;
-        // let deets =      Option::<Deets>::from_request(request).map_failure(|(a,b)| (a, CommonContextError::from(b)))?;
-
-
         let mut cookies = request.cookies();
         let csrf_token = match cookies.get("csrf_protection_token") {
             Some(token) => token.value().to_string(),
@@ -222,6 +181,46 @@ impl <'a, 'r> FromRequest<'a, 'r> for CommonContext<'a> {
     }
 }
 
+fn motion_snippet(
+    motion: &MotionWithCount
+) -> Markup {
+    html!{
+        a href=(format!("/motions/{}", motion.damm_id())) {
+            h3 { "Motion #" (motion.damm_id())}
+        }
+        p {
+            @if motion.is_super {
+                "Super motion "
+            } @else {
+                "Simple motion "
+            }
+            (motion.motion_text)
+        }
+        div {
+            @if motion.is_win {
+                span.winner {
+                    (motion.yes_vote_count)
+                    " for "
+                }
+                "vs"
+                span.loser {
+                    " against "
+                    (motion.no_vote_count)
+                }
+            } @else {
+                span.winner {
+                    (motion.no_vote_count)
+                    " against "
+                }
+                "vs"
+                span.loser {
+                    " for "
+                    (motion.yes_vote_count)
+                }
+            }
+        }
+    }
+}
 
 fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Markup {
     use schema::item_types::dsl as itdsl;
@@ -231,7 +230,7 @@ fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Mar
         html {
             head {
                 title { (title.as_ref()) }
-                link rel="stylesheet" href="main.css";
+                link rel="stylesheet" href="/main.css";
             }
             body {
                 div.container {
@@ -285,9 +284,7 @@ fn motion_vote(
     damm_id: String,
 ) -> impl Responder<'static> {
     let id:i64;
-    //dbg!(&damm_id);
     if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
-        //dbg!(&digits);
         id = atoi::atoi(digits.as_slice()).unwrap();
     } else {
         info!("bad id");
@@ -345,9 +342,7 @@ fn motion_vote(
 #[get("/motions/<damm_id>")]
 fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'static> {
     let id:i64;
-    //dbg!(&damm_id);
     if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
-        //dbg!(&digits);
         id = atoi::atoi(digits.as_slice()).unwrap();
     } else {
         return None;
@@ -381,6 +376,7 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
         .iter()
         .map(|v| if v.direction { (v.amount, 0) } else { (0, v.amount) })
         .fold((0,0), |acc, x| (acc.0 + x.0, acc.1 + x.1));
+    let motion = MotionWithCount::from_motion(motion, yes_vote_count as u64, no_vote_count as u64);
     let voting_html = if let Some(deets) = ctx.deets.as_ref() {
         let mut agents_vote:Option<MotionVote> = None;
         for vote in &votes {
@@ -395,14 +391,17 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
                 "Cast "
                 input type="number" name="count" value="0";
                 " vote(s) "
+                br;
                 label {
                    input type="radio" name="direction" value="for" disabled?[avd == Some(false)] checked?[avd == Some(true)];
                    " for"
                 }
+                br;
                 label {
                     input type="radio" name="direction" value="against" disabled?[avd == Some(true)] checked?[avd == Some(false)];
                     " against"
                 }
+                br;
                 input type="submit" name="submit" value="Go";
             }
         }
@@ -413,22 +412,7 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
     Some(page(&mut ctx, format!("Motion#{}", motion.damm_id()), html!{
         div.motion {
             a href="/" { "Home" }
-            a href=(format!("/motions/{}", motion.damm_id())) {
-                h3 { "Motion #" (motion.damm_id())}
-            }
-            p {
-                @if motion.is_super {
-                    "Super motion "
-                } @else {
-                    "Simple motion "
-                }
-                (motion.motion_text)
-            }
-            div {
-                (yes_vote_count)
-                " for/against "
-                (no_vote_count)
-            }
+            (motion_snippet(&motion))
             hr;
             (voting_html)
             hr;
@@ -480,49 +464,19 @@ fn index(mut ctx: CommonContext) -> impl Responder<'static> {
     }).collect():Result<Vec<_>,diesel::result::Error>).unwrap();
 
 
-    page(&mut ctx, "MOTIONS", html!{
+    page(&mut ctx, "All Motions", html!{
         @for motion in &motions {
             div.motion {
-                a href=(format!("/motions/{}", motion.damm_id())) {
-                    h5 { "Motion #" (motion.damm_id())}
-                }
-                p {
-                    @if motion.is_super {
-                        "Super motion "
-                    } @else {
-                        "Simple motion "
-                    }
-                    (motion.motion_text)
-                }
-                div {
-                    (motion.yes_vote_count)
-                    " for/against "
-                    (motion.no_vote_count)
-                }
+                (motion_snippet(&motion))
             }
         }
     })
-    // Html(
-    //     format!(r#"
-    //         <html>
-    //             <head>
-    //                 <title>MOTIONS</title>
-    //                 <link rel="stylesheet" href="main.css">
-    //             </head>
-    //             <body>
-    //                 <div class="container">
-    //                     <form action="/login/discord" method="post">
-    //                         <input type="hidden" name="csrf" value="{}" />
-    //                         <input type="submit" name="submit" value="go" />
-    //                     </form>
-    //     "#, csrf.0)
-    // )
 }
 
-#[get("/cookies")]
-fn cookies(mut cookies: Cookies<'_>) -> impl Responder<'static> {
-    format!("{:#?}",cookies.get_private("token"))
-}
+// #[get("/cookies")]
+// fn cookies(mut cookies: Cookies<'_>) -> impl Responder<'static> {
+//     format!("{:#?}",cookies.get_private("token"))
+// }
 
 #[get("/oauth-finish")]
 fn oauth_finish(token: TokenResponse<DiscordOauth>, mut cookies: Cookies<'_>) -> Redirect {
@@ -545,7 +499,6 @@ fn oauth_finish(token: TokenResponse<DiscordOauth>, mut cookies: Cookies<'_>) ->
 fn get_deets(
     mut cookies: Cookies<'_>
 ) -> Result<Redirect, Box<dyn std::error::Error>> {
-    //authorization: bearer
     let token;
     if let Some(val) = cookies.get_private("token") {
         token = val.value().to_string()
@@ -573,18 +526,14 @@ fn get_deets(
 
 #[post("/login/discord", data = "<data>")]
 fn login(
-    csrf_validation: Option<CSRFVerify>,
     oauth2: OAuth2<DiscordOauth>,
     mut cookies: Cookies<'_>,
     data: LenientForm<CSRFForm>,
 ) -> Result<Redirect, rocket::http::Status> {
     let mut okay = false;
-    if csrf_validation.is_none() {
-        let maybe_token = cookies.get("csrf_protection_token");
-        if let Some(token) = maybe_token {
-            if token.value() == data.csrf.as_str() {
-                okay = true
-            }
+    if let Some(token) = cookies.get("csrf_protection_token") {
+        if token.value() == data.csrf.as_str() {
+            okay = true
         }
     }
     if !okay {
@@ -592,34 +541,19 @@ fn login(
     }
     Ok(oauth2.get_redirect(&mut cookies, &["identify"]).unwrap())
 }
-
-#[get("/discorddata")]
-fn discord_data(mut cookies: Cookies<'_>) -> Result<String, reqwest::Error> {
-    let client = reqwest::blocking::Client::new();
-    let resp = client.get("https://discord.com/api/v8/users/@me")
-        .bearer_auth(cookies.get_private("token").unwrap().value())
-        .send()?;
-    let deets = format!("{:#?}", &resp);
-    Ok(format!("{}, {}", deets, resp.text().unwrap()))
-}
 pub fn main() {
     rocket::ignite()
-        // .attach(AdHoc::on_attach("Oauth secrets from env", |rocket| {
-        //     let id = std::env::var("OAUTH_CLIENT_ID").unwrap();
-        //     let secret = std::env::var("OAUTH_CLIENT_SECRET").unwrap();
-        //     let table = rocket.config.extras
-        //         .get_mut("oauth").unwrap()
-        //         .as_table_mut().unwrap()
-        //         .get_mut("discord").unwrap()
-        //         .as_table_mut().unwrap();
-        //     table.insert("client_id".into(), id);
-        //     table.insert("client_secret".into(), secret);
-        //     drop(table);
-        //     Ok(rocket)
-        // }))
         .manage(rocket_diesel::init_pool())
         .attach(OAuth2::<DiscordOauth>::fairing("discord"))
-        .mount("/",routes![index, oauth_finish, login, cookies, discord_data, get_deets, motion_listing, motion_vote])
-        .mount("/static", StaticFiles::from("static"))
+        .mount("/", StaticFiles::from("static"))
+        .mount("/",routes![
+            index,
+            oauth_finish,
+            login,
+            //cookies,
+            get_deets,
+            motion_listing,
+            motion_vote,
+        ])
         .launch();
 }
