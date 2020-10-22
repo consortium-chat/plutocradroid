@@ -52,6 +52,10 @@ impl<'a> MotionWithCount<'a>{
     pub fn damm_id(&self) -> String {
         crate::damm::add_to_str(format!("{}",self.rowid))
     }
+
+    pub fn end_at(&self) -> DateTime<Utc> {
+        self.last_result_change + *crate::bot::MOTION_EXPIRATION
+    }
 }
 
 #[derive(Copy,Clone,Debug,Serialize,Queryable)]

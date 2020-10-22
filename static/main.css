@@ -11,3 +11,17 @@ html {
     font-weight: bolder;
     font-size: 120%;
 }
+
+.motion-time {
+    align-self: end;
+    margin-left: 1em;
+}
+
+.motion-title {
+    margin-bottom: 0;
+}
+
+.motion-titlebar {
+    display: flex;
+    margin-top: 3em;
+}

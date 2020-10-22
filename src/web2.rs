@@ -5,6 +5,9 @@ use rocket::http::{Cookies, Cookie, SameSite};
 use rocket::response::{Responder, Redirect};
 use rocket::request::{FromRequest,Request,Outcome};
 use rocket::request::LenientForm;
+use rocket::response::content::Content;
+use rocket::http::ContentType;
+use rocket::http::RawStr;
 use rocket_contrib::serve::StaticFiles;
 use maud::{html, Markup};
 use diesel::prelude::*;
@@ -18,6 +21,41 @@ fn generate_state<A: rand::RngCore + rand::CryptoRng>(rng: &mut A) -> Result<Str
         String::from("Failed to generate random data")
     })?;
     Ok(base64::encode_config(&buf, base64::URL_SAFE_NO_PAD))
+}
+
+#[derive(Debug,Copy,Clone,PartialEq,Eq)]
+enum MotionListFilter {
+    All,
+    Passed,
+    Failed,
+    Finished,
+    Pending,
+    PendingPassed,
+}
+
+impl Default for MotionListFilter {
+    fn default() -> Self {
+        MotionListFilter::All
+    }
+}
+
+impl<'v> rocket::request::FromFormValue<'v> for MotionListFilter {
+    type Error = &'v RawStr;
+    fn from_form_value(v: &'v RawStr) -> Result<Self, Self::Error> {
+        match v.as_str() {
+            "all" => Ok(Self::All),
+            "passed" => Ok(Self::Passed),
+            "failed" => Ok(Self::Failed),
+            "finished" => Ok(Self::Finished),
+            "pending" => Ok(Self::Pending),
+            "pending_passed" => Ok(Self::PendingPassed),
+            _ => Err(v)
+        }
+    }
+
+    fn default() -> Option<Self> {
+        Some(Default::default())
+    }
 }
 
 struct DiscordOauth;
@@ -185,8 +223,33 @@ fn motion_snippet(
     motion: &MotionWithCount
 ) -> Markup {
     html!{
-        a href=(format!("/motions/{}", motion.damm_id())) {
-            h3 { "Motion #" (motion.damm_id())}
+        div.motion-titlebar {
+            a href=(format!("/motions/{}", motion.damm_id())) {
+                h3.motion-title { "Motion #" (motion.damm_id())}
+            }
+            span.motion-time {
+                @if motion.announcement_message_id.is_some() {
+                    @if motion.is_win {
+                        "PASSED"
+                    } @else {
+                        "FAILED"
+                    }
+                    " at "
+                } @else {
+                    " will "
+                    @if motion.is_win {
+                        "pass"
+                    } @else {
+                        "fail"
+                    }
+                    " at"
+                    abbr title="assuming no other result changes" { "*" }
+                    " "
+                }
+                time datetime=(motion.end_at().to_rfc3339()) {
+                    (motion.end_at().to_rfc2822())
+                }
+            }
         }
         p {
             @if motion.is_super {
@@ -290,17 +353,7 @@ fn motion_vote(
         info!("bad id");
         return Err(rocket::http::Status::NotFound);
     }
-    let mut okay = false;
-    if let Some(token) = ctx.cookies.get("csrf_protection_token") {
-        dbg!(token);
-        dbg!(token.value());
-        dbg!(&data.csrf);
-        if token.value() == data.csrf.as_str() {
-            okay = true
-        }
-    }
-    if !okay {
-        info!("bad csrf");
+    if ctx.cookies.get("csrf_protection_token").map(|token| token.value()) != Some(data.csrf.as_str()) {
         return Err(rocket::http::Status::BadRequest);
     }
     let deets:&Deets;
@@ -433,19 +486,23 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
     }))
 }
 
-#[get("/")]
-fn index(mut ctx: CommonContext) -> impl Responder<'static> {
+#[get("/?<filter>")]
+fn index(mut ctx: CommonContext, filter: MotionListFilter) -> impl Responder<'static> {
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
-    let bare_motions:Vec<Motion> = mdsl::motions.select((
-        mdsl::rowid,
-        mdsl::bot_message_id,
-        mdsl::motion_text,
-        mdsl::motioned_at,
-        mdsl::last_result_change,
-        mdsl::is_super,
-        mdsl::announcement_message_id,
-    )).order((mdsl::announcement_message_id.is_not_null().desc(), mdsl::rowid)).get_results(&*ctx).unwrap();
+    let bare_motions:Vec<Motion> = mdsl::motions
+        .select((
+            mdsl::rowid,
+            mdsl::bot_message_id,
+            mdsl::motion_text,
+            mdsl::motioned_at,
+            mdsl::last_result_change,
+            mdsl::is_super,
+            mdsl::announcement_message_id,
+        ))
+        .order((mdsl::announcement_message_id.is_not_null().desc(), mdsl::rowid.desc()))
+        .get_results(&*ctx)
+        .unwrap();
 
     let get_vote_count = |motion_id:i64, dir:bool| -> Result<i64, diesel::result::Error> {
         use bigdecimal::{BigDecimal,ToPrimitive};
@@ -457,14 +514,92 @@ fn index(mut ctx: CommonContext) -> impl Responder<'static> {
         Ok(votes.map(|bd| bd.to_i64().unwrap()).unwrap_or(0))
     };
 
-    let motions = (bare_motions.into_iter().map(|m| {
+    let all_motions = (bare_motions.into_iter().map(|m| {
         let yes_votes = get_vote_count(m.rowid, true)?;
         let no_votes = get_vote_count(m.rowid, false)?;
         Ok(MotionWithCount::from_motion(m, yes_votes as u64, no_votes as u64))
-    }).collect():Result<Vec<_>,diesel::result::Error>).unwrap();
+    }).collect():Result<Vec<_>,diesel::result::Error>).unwrap().into_iter();
 
+    let motions = match filter {
+        MotionListFilter::All => all_motions.collect(),
+
+        MotionListFilter::Failed =>
+            all_motions.filter(|m| m.announcement_message_id.is_some() && !m.is_win).collect(),
+
+        MotionListFilter::Finished =>
+            all_motions.filter(|m| m.announcement_message_id.is_some()).collect(),
+
+        MotionListFilter::Passed =>
+            all_motions.filter(|m| m.announcement_message_id.is_some() &&  m.is_win).collect(),
+
+        MotionListFilter::Pending =>
+            all_motions.filter(|m| m.announcement_message_id.is_none()).collect(),
+
+        MotionListFilter::PendingPassed =>
+            all_motions.filter(|m| m.announcement_message_id.is_none() ||  m.is_win).collect(),
+    }:Vec<_>;
 
     page(&mut ctx, "All Motions", html!{
+        form method="get" {
+            div {
+                "Filters:"
+                ul {
+                    @let options = [
+                        ("all", "All", MotionListFilter::All),
+                        ("passed", "Passed", MotionListFilter::Passed),
+                        ("failed", "Failed", MotionListFilter::Failed),
+                        ("finished", "Finished (Passed or Failed)", MotionListFilter::Finished),
+                        ("pending", "Pending", MotionListFilter::Pending),
+                        ("pending_passed", "Pending or Passed", MotionListFilter::PendingPassed),
+                    ];
+                    @for (codename, textname, val) in &options {
+                        li {
+                            label {
+                                input type="radio" name="filter" value=(codename) checked?[filter == *val];
+                                (textname)
+                            }
+                        }
+                    }
+                    /*li {
+                        label {
+                            input type="radio" name="filter" value="all" checked?[filter == MotionListFilter::All];
+                            "All"
+                        }
+                    }
+                    li {
+                        label {
+                            input type="radio" name="filter" value="passed" checked?[filter == MotionListFilter::Passed];
+                            "Passed"
+                        }
+                    }
+                    li {
+                        label {
+                            input type="radio" name="filter" value="failed" checked?[filter == MotionListFilter::Failed];
+                            "Failed"
+                        }
+                    }
+                    li {
+                        label {
+                            input type="radio" name="filter" value="finished" checked?[filter == MotionListFilter::Finished];
+                            "Finished (Passed or Failed)"
+                        }
+                    }
+                    li {
+                        label {
+                            input type="radio" name="filter" value="pending" checked?[filter == MotionListFilter::Pending];
+                            "Pending"
+                        }
+                    }
+                    li {
+                        label {
+                            input type="radio" name="filter" value="pending_passed" checked?[filter == MotionListFilter::PendingPassed];
+                            "Pending or Passed"
+                        }
+                    }*/
+                }
+                input type="submit" name="submit" value="Go";
+            }
+        }
         @for motion in &motions {
             div.motion {
                 (motion_snippet(&motion))
@@ -530,16 +665,45 @@ fn login(
     mut cookies: Cookies<'_>,
     data: LenientForm<CSRFForm>,
 ) -> Result<Redirect, rocket::http::Status> {
-    let mut okay = false;
-    if let Some(token) = cookies.get("csrf_protection_token") {
-        if token.value() == data.csrf.as_str() {
-            okay = true
-        }
-    }
-    if !okay {
-        return Err(rocket::http::Status::BadRequest)
+    if cookies.get("csrf_protection_token").map(|token| token.value()) != Some(data.csrf.as_str()) {
+        return Err(rocket::http::Status::BadRequest);
     }
     Ok(oauth2.get_redirect(&mut cookies, &["identify"]).unwrap())
+}
+
+#[get("/motions")]
+fn motions_api_compat(
+    ctx: CommonContext
+) -> impl Responder {
+    use schema::motions::dsl as mdsl;
+    use schema::motion_votes::dsl as mvdsl;
+    let bare_motions:Vec<Motion> = mdsl::motions.select((
+        mdsl::rowid,
+        mdsl::bot_message_id,
+        mdsl::motion_text,
+        mdsl::motioned_at,
+        mdsl::last_result_change,
+        mdsl::is_super,
+        mdsl::announcement_message_id,
+    )).get_results(&*ctx).unwrap();
+
+    let get_vote_count = |motion_id:i64, dir:bool| -> Result<i64, diesel::result::Error> {
+        use bigdecimal::{BigDecimal,ToPrimitive};
+        let votes:Option<BigDecimal> = mvdsl::motion_votes
+        .select(diesel::dsl::sum(mvdsl::amount))
+        .filter(mvdsl::motion.eq(motion_id))
+        .filter(mvdsl::direction.eq(dir))
+        .get_result(&*ctx)?;
+        Ok(votes.map(|bd| bd.to_i64().unwrap()).unwrap_or(0))
+    };
+
+    let res = (bare_motions.into_iter().map(|m| {
+        let yes_votes = get_vote_count(m.rowid, true)?;
+        let no_votes = get_vote_count(m.rowid, false)?;
+        Ok(MotionWithCount::from_motion(m, yes_votes as u64, no_votes as u64))
+    }).collect():Result<Vec<_>,diesel::result::Error>).unwrap();
+    
+    Content(ContentType::JSON, serde_json::to_string(&res).unwrap())
 }
 pub fn main() {
     rocket::ignite()
@@ -554,6 +718,7 @@ pub fn main() {
             get_deets,
             motion_listing,
             motion_vote,
+            motions_api_compat
         ])
         .launch();
 }

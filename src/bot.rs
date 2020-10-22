@@ -68,22 +68,23 @@ lazy_static! {
 
 #[cfg(feature = "debug")]
 lazy_static! {
-    static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::seconds(30);
-    static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::minutes(20);
+    pub static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::seconds(30);
+    pub static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::minutes(20);
 }
 
 #[cfg(not(feature = "debug"))]
 lazy_static! {
-    static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::hours(24);
-    static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::hours(48);
+    pub static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::hours(24);
+    pub static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::hours(48);
 }
 
 const VOTE_BASE_COST:u16 = 40;
 #[cfg(not(feature = "debug"))]
 const MOTIONS_CHANNEL:u64 = 609093491150028800; //bureaucracy channel
 #[cfg(feature = "debug")]
-const MOTIONS_CHANNEL:u64 = 610387757818183690; //test channel in shelvacuisawesomeserver
-//const MOTIONS_CHANNEL:u64 = 560918427091468387; //spam channel
+//const MOTIONS_CHANNEL:u64 = 694013828362534983; //pluto-dev channel
+//const MOTIONS_CHANNEL:u64 = 610387757818183690; //test channel in shelvacuisawesomeserver
+const MOTIONS_CHANNEL:u64 = 560918427091468387; //spam channel
 
 trait FromCommandArgs : Sized {
     fn from_command_args(ctx: &Context, msg: &Message, arg: &str) -> Result<Self, &'static str>;
