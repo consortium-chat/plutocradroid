@@ -218,8 +218,12 @@ pub fn bot_main() {
     let mut write_handle = client.data.write();
     write_handle.insert::<DbPoolKey>(Arc::clone(&arc_pool));
     drop(write_handle);
+    #[cfg(feature = "debug")]
+    let prefix = "&";
+    #[cfg(not(feature = "debug"))]
+    let prefix = "$";
     let mut framework = StandardFramework::new()
-    .configure(|c| c.prefix("$")) // set the bot's prefix to "$"
+    .configure(|c| c.prefix(prefix)) // set the bot's prefix to "$"
     .on_dispatch_error(|_ctx, msg, err| {
         println!(
             "{:?}\nerr'd with {:?}",
