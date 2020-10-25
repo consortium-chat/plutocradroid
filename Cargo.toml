@@ -30,6 +30,7 @@ base64 = "0.13.0"
 maud = { version = "*", features = ["rocket"] }
 atoi = "0.3.2"
 rocket_contrib = "0.4.5"
+env_logger = "0.8.1"
 
 [features]
 debug = []

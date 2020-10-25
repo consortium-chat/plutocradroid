@@ -24,6 +24,7 @@ use std::env;
 fn main() {
     dotenv::dotenv().unwrap();
 
+    env_logger::init();
     if env::var_os("RUN_BOT") == Some("1".into()) {
         bot::bot_main();
     } else if env::var_os("RUN_WEBSERVER") == Some("1".into()) {
