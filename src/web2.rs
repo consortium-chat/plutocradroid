@@ -500,7 +500,7 @@ fn index(mut ctx: CommonContext, filter: MotionListFilter) -> impl Responder<'st
             mdsl::is_super,
             mdsl::announcement_message_id,
         ))
-        .order((mdsl::announcement_message_id.is_not_null().desc(), mdsl::rowid.desc()))
+        .order((mdsl::announcement_message_id.is_null().desc(), mdsl::rowid.desc()))
         .get_results(&*ctx)
         .unwrap();
 
