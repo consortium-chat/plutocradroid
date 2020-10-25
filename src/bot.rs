@@ -441,7 +441,7 @@ fn update_motion_message(
         })
     }).unwrap();
     let target = mdsl::motions.filter(mdsl::bot_message_id.eq(msg.id.0 as i64));
-    diesel::update(target).set(mdsl::needs_update.eq(true)).execute(conn).unwrap();
+    diesel::update(target).set(mdsl::needs_update.eq(false)).execute(conn).unwrap();
     Ok(())
 }
 
