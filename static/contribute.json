@@ -1,0 +1,14 @@
+{
+    "name": "Plutocradroid Web",
+    "description": "Web portion of the Plutocradroid system of plutocracy management.",
+    "repository": {
+        "url": "https://github.com/consortium-chat/plutocradroid",
+        "license": "All rights reserved"
+    },
+    "keywords": [
+        "Rust",
+        "Rocket",
+        "Plutocracy",
+        "Government"
+    ]
+}

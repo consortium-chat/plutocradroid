@@ -6,8 +6,10 @@ use rocket::response::{Responder, Redirect};
 use rocket::request::{FromRequest,Request,Outcome};
 use rocket::request::LenientForm;
 use rocket::response::content::Content;
+use rocket::response::Response;
 use rocket::http::ContentType;
 use rocket::http::RawStr;
+use rocket::fairing;
 use rocket_contrib::serve::StaticFiles;
 use maud::{html, Markup};
 use diesel::prelude::*;
@@ -137,23 +139,6 @@ impl <'a, 'r> FromRequest<'a, 'r> for Deets {
     }
 }
 
-impl <'a, 'r> FromRequest<'a, 'r> for CSRFToken {
-    type Error = !;
-
-    fn from_request(request: &'a Request<'r>) -> Outcome<Self, Self::Error> {
-        let mut c = request.cookies();
-        let maybe_token = c.get("csrf_protection_token");
-        match maybe_token {
-            Some(token) => Outcome::Success(Self(token.value().to_string())),
-            None => {
-                let new_token = generate_state(&mut rand::thread_rng()).unwrap();
-                c.add(Cookie::new("csrf_protection_token", new_token.clone()));
-                Outcome::Success(Self(new_token))
-            }
-        }
-    }
-}
-
 #[derive(Debug)]
 enum CommonContextError {
     DeetsError(DeetsFail),
@@ -196,7 +181,13 @@ impl <'a, 'r> FromRequest<'a, 'r> for CommonContext<'a> {
             Some(token) => token.value().to_string(),
             None => {
                 let new_token = generate_state(&mut rand::thread_rng()).unwrap();
-                cookies.add(Cookie::new("csrf_protection_token", new_token.clone()));
+                cookies.add(
+                    Cookie::build("csrf_protection_token", new_token.clone())
+                        .same_site(SameSite::Strict)
+                        .secure(true)
+                        .http_only(true)
+                        .finish()
+                );
                 new_token
             }
         };
@@ -216,6 +207,39 @@ impl <'a, 'r> FromRequest<'a, 'r> for CommonContext<'a> {
             deets,
             conn,
         })
+    }
+}
+
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+struct SecureHeaders;
+
+impl fairing::Fairing for SecureHeaders {
+    fn info(&self) -> fairing::Info {
+        fairing::Info {
+            name: "Secure Headers Fairing",
+            kind: fairing::Kind::Response,
+        }
+    }
+
+    fn on_response(&self, request: &Request, response: &mut Response) {
+        use rocket::http::Header;
+        response.adjoin_header(Header::new(
+            "Content-Security-Policy",
+            "default-src 'none'; frame-ancestors 'none'; img-src 'self'; script-src 'self'; style-src 'self'"
+        ));
+        response.adjoin_header(Header::new(
+            "Referrer-Policy",
+            "strict-origin-when-cross-origin"
+        ));
+        response.adjoin_header(Header::new(
+            "X-Content-Type-Options",
+            "nosniff"
+        ));
+        response.adjoin_header(Header::new(
+            "X-Frame-Options",
+            "DENY"
+        ));
+        // Strict-Transport-Security is purposefully omitted here; Rocket does not support SSL, the layer that is adding SSL (most likely nginx or apache) should add an appropriate STS header.
     }
 }
 
@@ -560,42 +584,6 @@ fn index(mut ctx: CommonContext, filter: MotionListFilter) -> impl Responder<'st
                             }
                         }
                     }
-                    /*li {
-                        label {
-                            input type="radio" name="filter" value="all" checked?[filter == MotionListFilter::All];
-                            "All"
-                        }
-                    }
-                    li {
-                        label {
-                            input type="radio" name="filter" value="passed" checked?[filter == MotionListFilter::Passed];
-                            "Passed"
-                        }
-                    }
-                    li {
-                        label {
-                            input type="radio" name="filter" value="failed" checked?[filter == MotionListFilter::Failed];
-                            "Failed"
-                        }
-                    }
-                    li {
-                        label {
-                            input type="radio" name="filter" value="finished" checked?[filter == MotionListFilter::Finished];
-                            "Finished (Passed or Failed)"
-                        }
-                    }
-                    li {
-                        label {
-                            input type="radio" name="filter" value="pending" checked?[filter == MotionListFilter::Pending];
-                            "Pending"
-                        }
-                    }
-                    li {
-                        label {
-                            input type="radio" name="filter" value="pending_passed" checked?[filter == MotionListFilter::PendingPassed];
-                            "Pending or Passed"
-                        }
-                    }*/
                 }
                 input type="submit" name="submit" value="Go";
             }
@@ -608,22 +596,21 @@ fn index(mut ctx: CommonContext, filter: MotionListFilter) -> impl Responder<'st
     })
 }
 
-// #[get("/cookies")]
-// fn cookies(mut cookies: Cookies<'_>) -> impl Responder<'static> {
-//     format!("{:#?}",cookies.get_private("token"))
-// }
-
 #[get("/oauth-finish")]
 fn oauth_finish(token: TokenResponse<DiscordOauth>, mut cookies: Cookies<'_>) -> Redirect {
     cookies.add_private(
         Cookie::build("token", token.access_token().to_string())
             .same_site(SameSite::Lax)
+            .secure(true)
+            .http_only(true)
             .finish()
     );
     if let Some(refresh) = token.refresh_token().map(|s| s.to_owned()) {
         cookies.add_private(
             Cookie::build("refresh", refresh)
                 .same_site(SameSite::Lax)
+                .secure(true)
+                .http_only(true)
                 .finish()
         )
     }
@@ -654,6 +641,7 @@ fn get_deets(
         Cookie::build("deets", serde_json::to_string(&deets).unwrap())
             .same_site(SameSite::Lax)
             .secure(true)
+            .http_only(true)
             .finish()
     );
     Ok(Redirect::to("/"))
@@ -705,6 +693,7 @@ fn motions_api_compat(
     
     Content(ContentType::JSON, serde_json::to_string(&res).unwrap())
 }
+
 pub fn main() {
     rocket::ignite()
         .manage(rocket_diesel::init_pool())
@@ -718,7 +707,8 @@ pub fn main() {
             get_deets,
             motion_listing,
             motion_vote,
-            motions_api_compat
+            motions_api_compat,
+            contribute_json
         ])
         .launch();
 }
