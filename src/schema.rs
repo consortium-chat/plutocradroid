@@ -1,6 +1,15 @@
 table! {
+    item_type_aliases (alias) {
+        name -> Text,
+        alias -> Text,
+    }
+}
+
+table! {
     item_types (name) {
         name -> Text,
+        long_name_plural -> Text,
+        long_name_ambiguous -> Text,
     }
 }
 
@@ -58,11 +67,13 @@ table! {
     }
 }
 
+joinable!(item_type_aliases -> item_types (name));
 joinable!(motion_votes -> motions (motion));
 joinable!(motions -> motion_ids (rowid));
 joinable!(transfers -> item_types (ty));
 
 allow_tables_to_appear_in_same_query!(
+    item_type_aliases,
     item_types,
     motion_ids,
     motions,

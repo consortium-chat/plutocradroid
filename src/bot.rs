@@ -464,12 +464,21 @@ fn ping(ctx: &mut Context, msg: &Message) -> CommandResult {
 #[command]
 #[num_args(2)]
 fn fabricate(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
+    use diesel::prelude::*;
+    use schema::item_types::dsl as it;
+    use schema::item_type_aliases::dsl as ita;
+    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
+
     let ty:ItemType;
     let ty_str:String = args.single()?;
-    if GEN_NAMES.contains(&&*ty_str) {
-        ty = ItemType::Generator
-    } else if PC_NAMES.contains(&&*ty_str) {
-        ty = ItemType::PoliticalCapital
+    let alias:Option<ItemType> = ita::item_type_aliases
+        .inner_join(it::item_types)
+        .select(it::item_types::all_columns())
+        .filter(ita::alias.eq(&ty_str))
+        .get_result(&*conn)
+        .optional()?;
+    if let Some(it) = alias{
+        ty = it;
     } else {
         return Err("Unrecognized type".into());
     }
@@ -487,7 +496,6 @@ fn fabricate(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult 
 
     let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
     conn.transaction::<_, diesel::result::Error, _>(|| {
-        use diesel::prelude::*;
         use view_schema::balance_history::dsl as bh;
         use schema::transfers::dsl as tdsl;
         let prev_balance:i64 = view_schema::balance_history::table
@@ -523,11 +531,11 @@ fn fabricate(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult 
 fn balances(ctx: &mut Context, msg: &Message) -> CommandResult {
     use diesel::prelude::*;
     use view_schema::balance_history::dsl as bh;
-    //use schema::pc_transfers::dsl as pct;
+    use schema::item_types::dsl as it;
+    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
     
 
-    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
-    let get_bal = |ty_str:&'static str| {
+    let get_bal = |ty_str:&str| {
         bh::balance_history
         .select(bh::balance)
         .filter(bh::user.eq(msg.author.id.0 as i64))
@@ -538,13 +546,19 @@ fn balances(ctx: &mut Context, msg: &Message) -> CommandResult {
         .optional()
         .map(|opt| opt.unwrap_or(0i64)):Result<i64,_>
     };
-    let gen_count = get_bal("gen")?;
-    let pc_count = get_bal("pc")?;
+    let item_types:Vec<ItemType> = it::item_types
+        .get_results(&*conn)?;
+    let balances = (item_types.into_iter().map(|ty| get_bal(ty.db_name()).map(|bal| (ty,bal))).collect():Result<Vec<_>,_>)?;
+    // let gen_count = get_bal("gen")?;
+    // let pc_count = get_bal("pc")?;
     msg.channel_id.send_message(&ctx, |cm| {
         cm.embed(|e| {
             e.title("Your balances:");
-            e.field("Generators", gen_count, false);
-            e.field("Capital", pc_count, false);
+            // e.field("Generators", gen_count, false);
+            // e.field("Capital", pc_count, false);
+            for (item_type, amount) in &balances {
+                e.field(&item_type.long_name_plural, amount, false);
+            }
             e
         });
         cm
@@ -552,23 +566,32 @@ fn balances(ctx: &mut Context, msg: &Message) -> CommandResult {
     Ok(())
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum ItemType {
-    PoliticalCapital,
-    Generator,
+// #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+// enum ItemType {
+//     PoliticalCapital,
+//     Generator,
+// }
+
+// impl ItemType {
+//     pub fn db_name(&self) -> &'static str {
+//         match *self {
+//             ItemType::PoliticalCapital => "pc",
+//             ItemType::Generator => "gen",
+//         }
+//     }
+// }
+#[derive(Debug, PartialEq, Eq, Clone, Queryable)]
+struct ItemType{
+    pub name: String,
+    pub long_name_plural: String,
+    pub long_name_ambiguous: String,
 }
 
 impl ItemType {
-    pub fn db_name(&self) -> &'static str {
-        match *self {
-            ItemType::PoliticalCapital => "pc",
-            ItemType::Generator => "gen",
-        }
+    pub fn db_name(&self) -> &str {
+        self.name.as_str()
     }
 }
-
-const PC_NAMES :&[&str] = &["pc","politicalcapital","political-capital","capital"];
-const GEN_NAMES:&[&str] = &["gen", "g", "generator", "generators", "gens"];
 
 #[command]
 #[min_args(2)]
@@ -585,31 +608,47 @@ fn force_give(ctx:&mut Context, msg:&Message, args:Args) -> CommandResult {
 }
 
 fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -> CommandResult {
+    use diesel::prelude::*;
+    use schema::item_types::dsl as it;
+    use schema::item_type_aliases::dsl as ita;
+    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
+
     let user_str:String = args.single()?;
     let user = UserId::from_command_args( ctx, msg, &user_str )?;
     if check_user && !ctx.cache.read().users.contains_key(&user) {
         return Err("User not found".into());
     }
-    let mut ty:Option<ItemType> = None;
+    let mut maybe_ty:Option<ItemType> = None;
     let mut amount:Option<u64> = None;
     for arg_result in args.iter::<String>(){
         let arg = arg_result.unwrap();
-        if PC_NAMES.contains(&&*arg) {
-            ty = Some(ItemType::PoliticalCapital);
-        } else if GEN_NAMES.contains(&&*arg) {
-            ty = Some(ItemType::Generator);
+        let alias:Option<ItemType> = ita::item_type_aliases
+            .inner_join(it::item_types)
+            .select(it::item_types::all_columns())
+            .filter(ita::alias.eq(&arg))
+            .get_result(&*conn)
+            .optional()?;
+        if let Some(ty) = alias {
+            maybe_ty = Some(ty);
         } else if let Some(idx) = arg.find(|c| !('0' <= c && c <= '9')) {
             if idx == 0 {
                 return Err(format!("Invalid item type {}", arg).into());
             }
             let (count_str, ty_str) = arg.split_at(idx);
-            if PC_NAMES.contains(&ty_str) {
-                ty = Some(ItemType::PoliticalCapital);
-            } else if GEN_NAMES.contains(&ty_str) {
-                ty = Some(ItemType::Generator);
-            } else {
-                return Err(format!("Unrecognized item type {}", ty_str).into());
+            if !ty_str.is_empty() {
+                let alias:Option<ItemType> = ita::item_type_aliases
+                    .inner_join(it::item_types)
+                    .select(it::item_types::all_columns())
+                    .filter(ita::alias.eq(&ty_str))
+                    .get_result(&*conn)
+                    .optional()?;
+                if let Some(ty) = alias {
+                    maybe_ty = Some(ty);
+                } else {
+                    return Err(format!("Unrecognized item type {}", ty_str).into());
+                }
             }
+
             match count_str.parse():Result<u64,_> {
                 Err(e) => return Err(format!("Bad count {:?}", e).into()),
                 Ok(val) => amount = Some(val),
@@ -622,13 +661,11 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
         }
     }
 
-    if let (Some(amount), Some(ty)) = (amount, ty) {
-        let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
+    if let (Some(amount), Some(ty)) = (amount, maybe_ty) {
 
         let mut fail:Option<&'static str> = None;
-        
+        let ty_copy = ty.clone();
         conn.transaction::<_, diesel::result::Error, _>(|| {
-            use diesel::prelude::*;
 
             use view_schema::balance_history::dsl as bh;
             let mut ids = [msg.author.id.0, user.0];
@@ -644,7 +681,7 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
                     bh::balance_history
                         .select(bh::balance)
                         .filter(bh::user.eq(*id as i64))
-                        .filter(bh::ty.eq(ty.db_name()))
+                        .filter(bh::ty.eq(ty_copy.db_name()))
                         .order(bh::happened_at.desc())
                         .limit(1)
                         .for_update()
@@ -671,7 +708,7 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
                 to_balance:i64,
                 happened_at:chrono::DateTime<chrono::Utc>,
                 message_id:i64,
-                ty:&'static str,
+                ty:String,
             }
 
             let from_balance;
@@ -692,7 +729,7 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
                 to_balance,
                 happened_at: chrono::Utc::now(),
                 message_id: msg.id.0 as i64,
-                ty: ty.db_name(),
+                ty: ty.db_name().into(),
             };
 
             diesel::insert_into(schema::transfers::table).values(&t).execute(&*conn)?;
@@ -705,10 +742,7 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
             msg.reply(&ctx, format!(
                 "Successfully transferred {} {} to {}.",
                 amount,
-                match ty {
-                    ItemType::Generator => "generator(s)",
-                    ItemType::PoliticalCapital => "political capital",
-                },
+                &ty.long_name_ambiguous,
                 user.mention()
             ))?;
         }
