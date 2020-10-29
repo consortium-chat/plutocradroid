@@ -25,3 +25,9 @@ html {
     display: flex;
     margin-top: 3em;
 }
+
+.build-info {
+    color: #ccc;
+    margin-top: 30px;
+    display: block;
+}

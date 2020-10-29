@@ -10,7 +10,6 @@ use rocket::response::Response;
 use rocket::http::ContentType;
 use rocket::http::RawStr;
 use rocket::fairing;
-use rocket_contrib::serve::StaticFiles;
 use maud::{html, Markup};
 use diesel::prelude::*;
 
@@ -358,6 +357,16 @@ fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Mar
                     }
                     hr;
                     (content)
+                    small.build-info {
+                        "Plutocradroid "
+                        (env!("VERGEN_SEMVER_LIGHTWEIGHT"))
+                        " commit "
+                        (env!("VERGEN_SHA_SHORT"))
+                        " built for "
+                        (env!("VERGEN_TARGET_TRIPLE"))
+                        " at "
+                        (env!("VERGEN_BUILD_TIMESTAMP"))
+                    }
                 }
             }
         }
@@ -694,11 +703,32 @@ fn motions_api_compat(
     Content(ContentType::JSON, serde_json::to_string(&res).unwrap())
 }
 
+macro_rules! statics {
+    ($( $funcname:ident => $filename:literal, $content_type:expr; )+) => {
+        $(
+            #[get($filename)]
+            fn $funcname() -> rocket::response::content::Content<&'static [u8]> {
+                rocket::response::content::Content($content_type, include_bytes!(concat!("../static", $filename)))
+            }
+        )+
+        
+        fn static_routes() -> Vec<rocket::Route> {
+            routes![$($funcname,)+]
+        }
+    };
+}
+
+statics!{
+    main_css => "/main.css", ContentType::CSS;
+    contribute_json => "/contribute.json", ContentType::JSON;
+    favicon_ico => "/favicon.ico", ContentType::Icon;
+}
+
 pub fn main() {
     rocket::ignite()
         .manage(rocket_diesel::init_pool())
         .attach(OAuth2::<DiscordOauth>::fairing("discord"))
-        .mount("/", StaticFiles::from("static"))
+        .mount("/", static_routes())
         .mount("/",routes![
             index,
             oauth_finish,
