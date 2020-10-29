@@ -221,7 +221,7 @@ impl fairing::Fairing for SecureHeaders {
         }
     }
 
-    fn on_response(&self, request: &Request, response: &mut Response) {
+    fn on_response(&self, _request: &Request, response: &mut Response) {
         use rocket::http::Header;
         response.adjoin_header(Header::new(
             "Content-Security-Policy",
@@ -239,7 +239,7 @@ impl fairing::Fairing for SecureHeaders {
             "X-Frame-Options",
             "DENY"
         ));
-        // Strict-Transport-Security is purposefully omitted here; Rocket does not support SSL, the layer that is adding SSL (most likely nginx or apache) should add an appropriate STS header.
+        // Strict-Transport-Security is purposefully omitted here; Rocket does not support SSL/TLS. The layer that is adding SSL/TLS (most likely nginx or apache) should add an appropriate STS header.
     }
 }
 
@@ -707,8 +707,7 @@ pub fn main() {
             get_deets,
             motion_listing,
             motion_vote,
-            motions_api_compat,
-            contribute_json
+            motions_api_compat
         ])
         .launch();
 }

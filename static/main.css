@@ -13,7 +13,7 @@ html {
 }
 
 .motion-time {
-    align-self: end;
+    align-self: flex-end;
     margin-left: 1em;
 }
 

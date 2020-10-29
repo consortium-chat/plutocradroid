@@ -32,7 +32,6 @@ impl serenity::prelude::TypeMapKey for DbPoolKey {
 
 #[group]
 #[commands(ping, give, force_give, balances, motion, supermotion, vote, hack_message_update)]
-//#[cfg_attr(feature = "debug", commands(transaction_history_csv))]
 struct General;
 
 #[group]
@@ -52,17 +51,17 @@ enum SpecialEmojiAction {
 lazy_static! {
     static ref USER_PING_RE:Regex = Regex::new(r"^\s*<@!?(\d+)>\s*$").unwrap();
     static ref SPECIAL_EMOJI:std::collections::HashMap<u64,SpecialEmojiAction> = hashmap!{
-        690487946054205470 => SpecialEmojiAction::Amount(1),
-        690487945945153557 => SpecialEmojiAction::Amount(2),
-        690487946213589032 => SpecialEmojiAction::Amount(5),
-        690487945701883954 => SpecialEmojiAction::Amount(10),
-        690487945936764969 => SpecialEmojiAction::Amount(20),
-        690487945072869457 => SpecialEmojiAction::Amount(50),
-        690487944552644639 => SpecialEmojiAction::Amount(100),
-        690487968695058432 => SpecialEmojiAction::Amount(10),
-        690487968523223051 => SpecialEmojiAction::Amount(1),
-        691352947820462121 => SpecialEmojiAction::Direction(true),
-        691352948072120380 => SpecialEmojiAction::Direction(false),
+        770749957723783169 => SpecialEmojiAction::Amount(1),
+        770750097793089596 => SpecialEmojiAction::Amount(2),
+        770750182874021888 => SpecialEmojiAction::Amount(5),
+        770750211281780776 => SpecialEmojiAction::Amount(10),
+        770750297621921802 => SpecialEmojiAction::Amount(20),
+        770750316530499604 => SpecialEmojiAction::Amount(50),
+        770750332946874388 => SpecialEmojiAction::Amount(100),
+        770750231776198698 => SpecialEmojiAction::Amount(10),
+        770749937960747029 => SpecialEmojiAction::Amount(1),
+        770750552291410000 => SpecialEmojiAction::Direction(true),
+        770750576257531914 => SpecialEmojiAction::Direction(false),
     };
 }
 
@@ -84,7 +83,8 @@ const MOTIONS_CHANNEL:u64 = 609093491150028800; //bureaucracy channel
 #[cfg(feature = "debug")]
 //const MOTIONS_CHANNEL:u64 = 694013828362534983; //pluto-dev channel
 //const MOTIONS_CHANNEL:u64 = 610387757818183690; //test channel in shelvacuisawesomeserver
-const MOTIONS_CHANNEL:u64 = 560918427091468387; //spam channel
+//const MOTIONS_CHANNEL:u64 = 560918427091468387; //spam channel
+const MOTIONS_CHANNEL:u64 = 770726979456466954; //pluto-beta-messages in CONceptualization
 
 trait FromCommandArgs : Sized {
     fn from_command_args(ctx: &Context, msg: &Message, arg: &str) -> Result<Self, &'static str>;
@@ -95,9 +95,6 @@ impl FromCommandArgs for UserId {
         if arg == "." || arg == "self" {
             return Ok(msg.author.id);
         }
-        // if arg == "last" || arg == "him" || arg == "her" || arg == "them" {
-        //     //TODO: find message before the current one that isn't from author in the same channel, and return that UserId
-        // }
         if let Ok(raw_id) = arg.parse():Result<u64,_> {
             return Ok(UserId::from(raw_id));
         }
@@ -148,7 +145,6 @@ impl FromCommandArgs for UserId {
 
 impl EventHandler for Handler {
     fn reaction_add(&self, ctx: Context, r: serenity::model::channel::Reaction) {
-        //dbg!(&r);
         let mut vote_count = 0;
         let mut vote_direction = None;
         let user_id = r.user_id;
@@ -222,8 +218,11 @@ pub fn bot_main() {
     let prefix = "&";
     #[cfg(not(feature = "debug"))]
     let prefix = "$";
+    let current_user = client.cache_and_http.http.get_current_user().expect("I don't know who I am!");
     let mut framework = StandardFramework::new()
-    .configure(|c| c.prefix(prefix)) // set the bot's prefix to "$"
+    .configure(|c| {
+        c.prefix(prefix).allow_dm(true).on_mention(Some(current_user.id))
+    })
     .on_dispatch_error(|_ctx, msg, err| {
         println!(
             "{:?}\nerr'd with {:?}",
