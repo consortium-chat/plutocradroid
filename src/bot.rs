@@ -986,6 +986,7 @@ const NO_WORDS :&[&str] = &[
     "\u{274C}",
     "\u{1f196}",
     ":ng:",
+    "naw",
 ];
 const ZERO_WORDS:&[&str] = &["zero", "zerovote", "nil", "nada", "nothing"];
 const IGNORE_WORDS:&[&str] = &["in", "i", "I", "think", "say", "fuck", "hell"];
