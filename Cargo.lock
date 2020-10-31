@@ -1421,7 +1421,7 @@ dependencies = [
 
 [[package]]
 name = "plutocradroid"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "atoi",
  "base64 0.13.0",
