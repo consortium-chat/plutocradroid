@@ -311,6 +311,48 @@ fn motion_snippet(
 fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Markup {
     use schema::item_types::dsl as itdsl;
     use crate::view_schema::balance_history::dsl as bhdsl;
+    bare_page(title, html!{
+        @if let Some(deets) = ctx.deets.as_ref() {
+            @let item_types:Vec<String> = itdsl::item_types.select(itdsl::name).get_results(&**ctx).unwrap();
+            @let id:i64 = deets.discord_user.id();
+            @let balances = item_types.iter().map(|name| {
+                (name,bhdsl::balance_history
+                    .select(bhdsl::balance)
+                    .filter(bhdsl::user.eq(id))
+                    .filter(bhdsl::ty.eq(name))
+                    .order(bhdsl::happened_at.desc())
+                    .limit(1)
+                    .get_result(&**ctx)
+                    .optional()
+                    .unwrap() //unwrap Result (query might fail)
+                    .unwrap_or(0) //unwrap Option (row might not exist)
+                )
+            });
+            p { "Welcome, " (deets.discord_user.username) "#" (deets.discord_user.discriminator)}
+            form action="/logout" method="post" {
+                input type="hidden" name="csrf" value=(ctx.csrf_token);
+                input type="submit" name="submit" value="Logout";
+            }
+            ul {
+                @for (name, amount) in balances {
+                    li { (amount) (name) }
+                }
+            }
+        } @else {
+            form action="/login/discord" method="post" {
+                input type="hidden" name="csrf" value=(ctx.csrf_token);
+                p { 
+                    "I don't know who you are. You should "
+                    input type="submit" name="submit" value="Login";
+                }
+            }
+        }
+        hr;
+        (content)
+    })
+}
+
+fn bare_page(title: impl AsRef<str>, content: Markup) -> Markup {
     html! {
         (maud::DOCTYPE)
         html {
@@ -321,42 +363,6 @@ fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Mar
             }
             body {
                 div.container {
-                    @if let Some(deets) = ctx.deets.as_ref() {
-                        @let item_types:Vec<String> = itdsl::item_types.select(itdsl::name).get_results(&**ctx).unwrap();
-                        @let id:i64 = deets.discord_user.id();
-                        @let balances = item_types.iter().map(|name| {
-                            (name,bhdsl::balance_history
-                                .select(bhdsl::balance)
-                                .filter(bhdsl::user.eq(id))
-                                .filter(bhdsl::ty.eq(name))
-                                .order(bhdsl::happened_at.desc())
-                                .limit(1)
-                                .get_result(&**ctx)
-                                .optional()
-                                .unwrap() //unwrap Result (query might fail)
-                                .unwrap_or(0) //unwrap Option (row might not exist)
-                            )
-                        });
-                        p { "Welcome, " (deets.discord_user.username) "#" (deets.discord_user.discriminator)}
-                        form action="/logout" method="post" {
-                            input type="hidden" name="csrf" value=(ctx.csrf_token);
-                            input type="submit" name="submit" value="Logout";
-                        }
-                        ul {
-                            @for (name, amount) in balances {
-                                li { (amount) (name) }
-                            }
-                        }
-                    } @else {
-                        form action="/login/discord" method="post" {
-                            input type="hidden" name="csrf" value=(ctx.csrf_token);
-                            p { 
-                                "I don't know who you are. You should"
-                                input type="submit" name="submit" value="Login";
-                            }
-                        }
-                    }
-                    hr;
                     (content)
                     small.build-info {
                         "Plutocradroid "
@@ -669,6 +675,24 @@ fn login(
     Ok(oauth2.get_redirect(&mut cookies, &["identify"]).unwrap())
 }
 
+#[post("/logout", data = "<data>")]
+fn logout(
+    mut ctx: CommonContext,
+    data: LenientForm<CSRFForm>,
+) -> Result<Markup, rocket::http::Status> {
+    if ctx.cookies.get("csrf_protection_token").map(|token| token.value()) != Some(data.csrf.as_str()) {
+        return Err(rocket::http::Status::BadRequest);
+    }
+    let cookies_clone = ctx.cookies.iter().map(Clone::clone).collect():Vec<_>;
+    for cookie in cookies_clone {
+        ctx.cookies.remove(cookie);
+    }
+    Ok(bare_page("Logged out.", html!{
+        p { "You have been logged out." }
+        a href="/" { "Home." }
+    }))
+}
+
 #[get("/motions")]
 fn motions_api_compat(
     ctx: CommonContext
@@ -708,16 +732,17 @@ pub fn main() {
     rocket::ignite()
         .manage(rocket_diesel::init_pool())
         .attach(OAuth2::<DiscordOauth>::fairing("discord"))
+        .attach(SecureHeaders)
         .mount("/", super::statics::statics_routes())
         .mount("/",routes![
             index,
             oauth_finish,
             login,
-            //cookies,
             get_deets,
             motion_listing,
             motion_vote,
-            motions_api_compat
+            motions_api_compat,
+            logout,
         ])
         .launch();
 }
