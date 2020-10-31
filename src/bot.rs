@@ -31,7 +31,7 @@ impl serenity::prelude::TypeMapKey for DbPoolKey {
 }
 
 #[group]
-#[commands(ping, give, force_give, balances, motion, supermotion, vote, hack_message_update)]
+#[commands(ping, give, force_give, balances, motion, supermotion, vote, hack_message_update, help, version_info)]
 struct General;
 
 #[group]
@@ -522,6 +522,26 @@ fn fabricate(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult 
 
     msg.reply(&ctx, "Fabricated.")?;
 
+    Ok(())
+}
+
+#[command]
+#[aliases("?","h")]
+fn help(ctx: &mut Context, msg: &Message) -> CommandResult {
+    msg.reply(&ctx, "For help see https://github.com/consortium-chat/plutocradroid/blob/master/README.md#commands")?;
+    Ok(())
+}
+
+#[command]
+#[aliases("v","info","version")]
+fn version_info(ctx: &mut Context, msg: &Message) -> CommandResult {
+    msg.reply(&ctx, format!(
+        "Plutocradroid {} commit {} built for {} at {}.\nhttps://github.com/consortium-chat/plutocradroid",
+        env!("VERGEN_SEMVER_LIGHTWEIGHT"),
+        env!("VERGEN_SHA_SHORT"),
+        env!("VERGEN_TARGET_TRIPLE"),
+        env!("VERGEN_BUILD_TIMESTAMP"),
+    ))?;
     Ok(())
 }
 

@@ -100,6 +100,20 @@ $vote 123 fuck no
 $vote 123
 ```
 
+## Help & Version
+
+```text
+$help
+```
+
+Get help about what commands are available. Currently just links to this page.
+
+```text
+$version
+```
+
+Prints the current version and other details about the software.
+
 ## Reaction voting
 
 Not the prettiest, but should still be more convenient than voting with the `$vote` command. On every motion, the bot reacts with certain emoji.
