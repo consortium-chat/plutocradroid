@@ -316,7 +316,8 @@ fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Mar
         html {
             head {
                 title { (title.as_ref()) }
-                link rel="stylesheet" href="/main.css";
+                link rel="stylesheet" href={"/" (static_path!(main.css))};
+                link rel="icon" type="image/png" href={"/" (static_path!(favicon.png))};
             }
             body {
                 div.container {
@@ -703,32 +704,11 @@ fn motions_api_compat(
     Content(ContentType::JSON, serde_json::to_string(&res).unwrap())
 }
 
-macro_rules! statics {
-    ($( $funcname:ident => $filename:literal, $content_type:expr; )+) => {
-        $(
-            #[get($filename)]
-            fn $funcname() -> rocket::response::content::Content<&'static [u8]> {
-                rocket::response::content::Content($content_type, include_bytes!(concat!("../static", $filename)))
-            }
-        )+
-        
-        fn static_routes() -> Vec<rocket::Route> {
-            routes![$($funcname,)+]
-        }
-    };
-}
-
-statics!{
-    main_css => "/main.css", ContentType::CSS;
-    contribute_json => "/contribute.json", ContentType::JSON;
-    favicon_ico => "/favicon.ico", ContentType::Icon;
-}
-
 pub fn main() {
     rocket::ignite()
         .manage(rocket_diesel::init_pool())
         .attach(OAuth2::<DiscordOauth>::fairing("discord"))
-        .mount("/", static_routes())
+        .mount("/", super::statics::statics_routes())
         .mount("/",routes![
             index,
             oauth_finish,

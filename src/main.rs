@@ -7,15 +7,17 @@
 #[macro_use] extern crate maplit;
 #[macro_use] extern crate serde;
 
+#[macro_use] mod statics;
+
 mod models;
 mod schema;
 mod view_schema;
 mod damm;
 mod rocket_diesel;
-
 mod bot;
 mod web2;
 mod is_win;
+mod static_responders;
 
 use std::env;
 
