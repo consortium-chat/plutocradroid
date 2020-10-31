@@ -988,7 +988,7 @@ const NO_WORDS :&[&str] = &[
     ":ng:",
 ];
 const ZERO_WORDS:&[&str] = &["zero", "zerovote", "nil", "nada", "nothing"];
-const IGNORE_WORDS:&[&str] = &["in", "i", "I", "think", "say", "fuck"];
+const IGNORE_WORDS:&[&str] = &["in", "i", "I", "think", "say", "fuck", "hell"];
 
 #[command]
 #[min_args(1)]
