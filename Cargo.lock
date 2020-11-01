@@ -1432,7 +1432,7 @@ dependencies = [
  "dotenv",
  "env_logger",
  "hex",
- "iron",
+ "hyper 0.10.16",
  "lazy_static",
  "log 0.4.11",
  "maplit",
