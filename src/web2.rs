@@ -609,6 +609,9 @@ fn index(mut ctx: CommonContext, filter: MotionListFilter) -> impl Responder<'st
                 (motion_snippet(&motion))
             }
         }
+        @if motions.empty() {
+            p.no-motions { "Nobody here but us chickens!" }
+        }
     })
 }
 
