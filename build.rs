@@ -62,9 +62,9 @@ fn {}() -> impl Responder<'static> {{
     statics_rs.push_str("    routes![");
     for (_,_,fn_name,hash_fn_name) in &list {
         statics_rs.push_str(fn_name);
-        statics_rs.push_str(",");
+        statics_rs.push(',');
         statics_rs.push_str(hash_fn_name);
-        statics_rs.push_str(",");
+        statics_rs.push(',');
     }
     statics_rs.push_str("]\n");
     statics_rs.push_str("}\n\n");
