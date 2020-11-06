@@ -344,6 +344,8 @@ fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Mar
                     li { (amount) (name) }
                 }
             }
+            a href="/" { "Home" }
+            " | "
             a href="/my-transactions" { "My Transactions" }
         } @else {
             form action="/login/discord" method="post" {
@@ -823,9 +825,13 @@ fn my_transactions(
                                         "user#\u{200B}"
                                         (other_party)
                                     } @else if let (Some(motion_id), Some(votes)) = (&txn.to_motion, &txn.to_votes) {
+                                        @let damm_id = crate::damm::add_to_str(motion_id.to_string());
                                         (votes)
-                                        " vote(s) on motion#"
-                                        (crate::damm::add_to_str(motion_id.to_string()))
+                                        " vote(s) on "
+                                        a href=(uri!(motion_listing:damm_id = &damm_id)) {
+                                            "motion #"
+                                            (&damm_id)
+                                        }
                                     } @else if txn.message_id.is_some() && txn.other_party.is_none() {
                                         "fabrication"
                                     }
