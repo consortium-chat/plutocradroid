@@ -31,3 +31,36 @@ html {
     margin-top: 30px;
     display: block;
 }
+
+.paren {
+    color: transparent;
+}
+
+.amount {
+    font-family: monospace;
+}
+
+.running-total {
+    font-family: monospace;
+}
+
+.amount.negative {
+    color: red;
+}
+
+.amount.negative>.paren {
+    color: inherit;
+}
+
+.transaction .amount {
+    text-align: right;
+}
+
+.transaction .running-total {
+    text-align: right;
+}
+
+.transaction>td {
+    padding-left: 2px;
+    padding-right: 2px;
+}

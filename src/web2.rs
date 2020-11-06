@@ -7,11 +7,11 @@ use rocket::request::{FromRequest,Request,Outcome};
 use rocket::request::LenientForm;
 use rocket::response::content::Content;
 use rocket::response::Response;
-use rocket::http::ContentType;
-use rocket::http::RawStr;
+use rocket::http::{ContentType, RawStr, Status};
 use rocket::fairing;
 use maud::{html, Markup};
 use diesel::prelude::*;
+use chrono::{DateTime, Utc, SecondsFormat, TimeZone};
 
 use crate::{schema, rocket_diesel};
 use crate::models::{Motion, MotionVote, MotionWithCount};
@@ -116,6 +116,12 @@ impl DiscordUser {
 #[derive(Deserialize,Serialize,Debug,Clone)]
 struct Deets {
     pub discord_user: DiscordUser,
+}
+
+impl Deets {
+    pub fn id(&self) -> i64 {
+        self.discord_user.id()
+    }
 }
 
 #[derive(Debug)]
@@ -338,6 +344,7 @@ fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Mar
                     li { (amount) (name) }
                 }
             }
+            a href="/my-transactions" { "My Transactions" }
         } @else {
             form action="/login/discord" method="post" {
                 input type="hidden" name="csrf" value=(ctx.csrf_token);
@@ -609,10 +616,270 @@ fn index(mut ctx: CommonContext, filter: MotionListFilter) -> impl Responder<'st
                 (motion_snippet(&motion))
             }
         }
-        @if motions.empty() {
+        @if motions.is_empty() {
             p.no-motions { "Nobody here but us chickens!" }
         }
     })
+}
+
+sql_function!{
+    #[sql_name = "coalesce"]
+    fn coalesce_2<T: diesel::sql_types::NotNull>(a: diesel::sql_types::Nullable<T>, b: T) -> T;
+}
+// use diesel::sql_types::Bool;
+// sql_function!{
+//     #[sql_name = "coalesce"]
+//     fn coalesce_2_bool(a: diesel::sql_types::Nullable<Bool>, b: Bool) -> Bool;
+// }
+
+#[get("/my-transactions?<before_ms>&<fun_ty>")]
+fn my_transactions(
+    mut ctx: CommonContext,
+    fun_ty: Option<String>,
+    before_ms: Option<i64>,
+) -> Result<Markup, Status> {
+    use crate::view_schema::balance_history::dsl as bh;
+    use crate::schema::item_types::dsl as it;
+    let before_ms = before_ms.unwrap_or(i64::MAX);
+    #[cfg(feature = "debug")]
+    let limit = 10;
+    #[cfg(not(feature = "debug"))]
+    let limit = 1000;
+    let fun_ty_string = fun_ty.unwrap_or_else(|| String::from("all"));
+    #[derive(Debug,Clone,PartialEq,Eq)]
+    enum FungibleSelection {
+        All,
+        Specific(String),
+    }
+    
+    impl FungibleSelection {
+        pub fn as_str(&self) -> &str {
+            match self {
+                FungibleSelection::All => "all",
+                FungibleSelection::Specific(s) => s,
+            }
+        }
+
+        pub fn as_option(&self) -> Option<&str> {
+            match self {
+                FungibleSelection::All => None,
+                FungibleSelection::Specific(s) => Some(s.as_str()),
+            }
+        }
+    }
+    #[derive(Debug,Clone,Queryable)]
+    struct Transaction {
+        pub rowid:i64,
+        pub balance:i64,
+        pub quantity:i64,
+        pub sign:i32,
+        pub happened_at:DateTime<Utc>,
+        pub ty:String,
+        pub comment:Option<String>,
+        pub other_party:Option<i64>,
+        pub to_motion:Option<i64>,
+        pub to_votes:Option<i64>,
+        pub message_id:Option<i64>,
+    }
+    #[derive(Debug,Clone)]
+    enum TransactionView {
+        Generated{amt: i64, bal: i64},
+        Trans(Transaction),
+    }
+    let fun_tys:Vec<String> = it::item_types.select(it::name).get_results(&*ctx).unwrap();
+    let fun_ty = if fun_ty_string == "all" {
+        FungibleSelection::All
+    } else if fun_tys.iter().any(|ft| ft.as_str() == fun_ty_string) {
+        FungibleSelection::Specific(fun_ty_string)
+    } else {
+        return Err(Status::BadRequest)
+    };
+    let txns:Option<Vec<_>> = ctx.deets.as_ref().map(|deets| {
+        let q = bh::balance_history
+            .select((
+                bh::rowid,
+                bh::balance,
+                bh::quantity,
+                bh::sign,
+                bh::happened_at,
+                bh::ty,
+                bh::comment,
+                bh::other_party,
+                bh::to_motion,
+                bh::to_votes,
+                bh::message_id,
+            ))
+            .filter(bh::user.eq(deets.id()))
+            .filter(coalesce_2(bh::ty.nullable().eq(fun_ty.as_option()).nullable(), true))
+            .filter(coalesce_2(bh::happened_at.nullable().lt(Utc.timestamp_millis_opt(before_ms).single()).nullable(),true))
+            .filter(bh::from_gen.eq(false))
+            .order(bh::happened_at.desc())
+            .limit(limit+1);
+        info!("{}", diesel::debug_query(&q));
+        let txns:Vec<Transaction> = q.get_results(&*ctx)
+            .unwrap();
+        info!("{} txns results", txns.len());
+        let mut gen_txns:Vec<Transaction> = if let [.., last] = txns.as_slice() {
+            bh::balance_history
+                .select((
+                    bh::rowid,
+                    bh::balance,
+                    bh::quantity,
+                    bh::sign,
+                    bh::happened_at,
+                    bh::ty,
+                    bh::comment,
+                    bh::other_party,
+                    bh::to_motion,
+                    bh::to_votes,
+                    bh::message_id,
+                ))
+                .filter(bh::user.eq(deets.id()))
+                .filter(coalesce_2(bh::ty.nullable().eq(fun_ty.as_option()).nullable(), true))
+                .filter(coalesce_2(bh::happened_at.nullable().lt(Utc.timestamp_millis_opt(before_ms).single()).nullable(),true))
+                .filter(bh::happened_at.gt(last.happened_at))
+                .filter(bh::from_gen.eq(true))
+                .order(bh::happened_at.desc())
+                .get_results(&*ctx)
+                .unwrap()
+        } else { Vec::new() };
+        let mut txn_views = Vec::new();
+        let iter = if txns.len() == ((limit+1) as usize) {
+            txns[..txns.len()-1].iter()
+        } else { txns.iter() };
+        for txn in iter.rev() {
+            let mut amt = 0;
+            let mut bal = 0;
+            while gen_txns.last().map(|t| t.happened_at < txn.happened_at).unwrap_or(false) {
+                let gen_txn = gen_txns.pop().unwrap();
+                amt += gen_txn.quantity;
+                bal = gen_txn.balance;
+            }
+            if amt > 0 {
+                txn_views.push(TransactionView::Generated{amt, bal});
+            }
+            txn_views.push(TransactionView::Trans(txn.clone()));
+        }
+        let mut amt = 0;
+        let mut bal = 0;
+        while let Some(gt) = gen_txns.pop() {
+            amt += gt.quantity;
+            bal = gt.balance;
+        }
+        if amt > 0 {
+            txn_views.push(TransactionView::Generated{amt,bal});
+        }
+        txn_views.reverse();
+        txn_views
+    });
+    Ok(page(&mut ctx, "My Transactions", html!{
+        @if let Some(txns) = txns {
+            h3 { "My Transactions" }
+            form {
+                "Show transactions in"
+                ul {
+                    @for ft in &fun_tys {
+                        li {
+                            label {
+                                input type="radio" name="fun_ty" value=(ft) checked?[fun_ty == FungibleSelection::Specific(ft.clone())];
+                                (ft)
+                            }
+                        }
+                    }
+                    li {
+                        label {
+                            input type="radio" name="fun_ty" value="all" checked?[fun_ty == FungibleSelection::All];
+                            "All currencies"
+                        }
+                    }
+                }
+                button { "Go" }
+            }
+            table border="1" {
+                thead {
+                    tr {
+                        th { "Timestamp" }
+                        th { "Description" }
+                        th { "Amount" }
+                        th { "Running Total" }
+                    }
+                }
+                tbody {
+                    @for txn_view in &txns {
+                        @if let TransactionView::Trans(txn) = txn_view {
+                            tr.transaction {
+                                td {
+                                    time datetime=(txn.happened_at.to_rfc3339()) {
+                                        (txn.happened_at.to_rfc3339_opts(SecondsFormat::Secs, true))
+                                    }
+                                }
+                                td {
+                                    @if let Some(other_party) = &txn.other_party {
+                                        @if txn.sign < 0 {
+                                            "transfer to "
+                                        } @else {
+                                            "transfer from "
+                                        }
+                                        "user#\u{200B}"
+                                        (other_party)
+                                    } @else if let (Some(motion_id), Some(votes)) = (&txn.to_motion, &txn.to_votes) {
+                                        (votes)
+                                        " vote(s) on motion#"
+                                        (crate::damm::add_to_str(motion_id.to_string()))
+                                    } @else if txn.message_id.is_some() && txn.other_party.is_none() {
+                                        "fabrication"
+                                    }
+                                    " "
+                                    @if let Some(comment) = &txn.comment {
+                                        "“" (comment) "”"
+                                    }
+                                }
+                                td.amount.negative[txn.sign < 0] {
+                                    span.paren { "(" }
+                                    span.amount-inner { (txn.quantity) }
+                                    span.ty { (txn.ty) }
+                                    span.paren { ")" }
+                                }
+                                td.running-total {
+                                    span.amount-inner { (txn.balance) }
+                                    span.ty { (txn.ty) }
+                                }
+                            }
+                        } @else {
+                            @let (amt, bal) = match txn_view { TransactionView::Generated{amt, bal} => (amt, bal), _ => unreachable!() };
+                            tr.transaction.generated {
+                                td {}
+                                td { "generator outputs" }
+                                td.amount {
+                                    span.paren { "(" }
+                                    span.amount-inner { (amt) }
+                                    span.ty { "pc" }
+                                    span.paren { ")" }
+                                }
+                                td.running-total {
+                                    span.amount-inner { (bal) }
+                                    span.ty { "pc" }
+                                }
+                            }
+                        }
+                    }
+                    @if txns.is_empty() {
+                        tr {
+                            td colspan="4" {
+                                "Nothing to show."
+                            }
+                        }
+                    }
+                }
+            }
+            @if txns.len() == (limit as usize) {
+                @let txn = match txns.last() { Some(TransactionView::Trans(t)) => t, _ => unreachable!() };
+                a href=(uri!(my_transactions: before_ms = txn.happened_at.timestamp_millis(), fun_ty = fun_ty.as_str())) { "Next" }
+            }
+        } @else {
+            p { "You must be logged in to view your transactions." }
+        }
+    }))
 }
 
 #[get("/oauth-finish")]
@@ -746,6 +1013,7 @@ pub fn main() {
             motion_vote,
             motions_api_compat,
             logout,
+            my_transactions,
         ])
         .launch();
 }

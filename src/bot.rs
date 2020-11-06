@@ -817,8 +817,8 @@ fn transaction_history_csv(ctx:&mut Context, msg:&Message, _args:Args) -> Comman
     let mut wtr = csv::Writer::from_writer(vec![]);
     for tn in history {
         let other_party_id:Option<i64> = tn.other_party;
-        let mut other_party:String = other_party_id.map(|id| id.to_string()).unwrap_or(String::new());
-        other_party.push_str(":");
+        let mut other_party:String = other_party_id.map(|id| id.to_string()).unwrap_or_default();
+        other_party.push(':');
         let other_party_tag = other_party_id.map(|id| ctx.cache.read().users.get(&UserId::from(id as u64)).map(|a| a.read().tag())).flatten();
         if let Some(s) = other_party_tag {
             other_party.push_str(&s);
@@ -829,7 +829,7 @@ fn transaction_history_csv(ctx:&mut Context, msg:&Message, _args:Args) -> Comman
             other_party,
             amount: (tn.quantity * (tn.sign as i64)).to_string(),
             balance_after: tn.balance.to_string(),
-            comment: tn.comment.unwrap_or(String::new()),
+            comment: tn.comment.unwrap_or_default(),
         };
         wtr.serialize(csv_thing).unwrap();
     }

@@ -9,5 +9,9 @@ table! {
         ty -> Text,
         comment -> Nullable<Text>,
         other_party -> Nullable<Int8>,
+        message_id -> Nullable<Int8>,
+        to_motion -> Nullable<Int8>,
+        to_votes -> Nullable<Int8>,
+        from_gen -> Bool,
     }
 }
