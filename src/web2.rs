@@ -694,7 +694,7 @@ fn my_transactions(
     } else {
         return Err(Status::BadRequest)
     };
-    let txns:Option<Vec<_>> = ctx.deets.as_ref().map(|deets| {
+    let txns:Option<(Vec<_>,bool)> = ctx.deets.as_ref().map(|deets| {
         let q = bh::balance_history
             .select((
                 bh::rowid,
@@ -744,9 +744,9 @@ fn my_transactions(
                 .unwrap()
         } else { Vec::new() };
         let mut txn_views = Vec::new();
-        let iter = if txns.len() == ((limit+1) as usize) {
-            txns[..txns.len()-1].iter()
-        } else { txns.iter() };
+        let (hit_limit,iter) = if txns.len() == ((limit+1) as usize) {
+            (true, txns[..txns.len()-1].iter())
+        } else { (false, txns.iter()) };
         for txn in iter.rev() {
             let mut amt = 0;
             let mut bal = 0;
@@ -770,10 +770,10 @@ fn my_transactions(
             txn_views.push(TransactionView::Generated{amt,bal});
         }
         txn_views.reverse();
-        txn_views
+        (txn_views, hit_limit)
     });
     Ok(page(&mut ctx, "My Transactions", html!{
-        @if let Some(txns) = txns {
+        @if let Some((txns, hit_limit)) = txns {
             h3 { "My Transactions" }
             form {
                 "Show transactions in"
@@ -872,8 +872,8 @@ fn my_transactions(
                     }
                 }
             }
-            @if txns.len() == (limit as usize) {
-                @let txn = match txns.last() { Some(TransactionView::Trans(t)) => t, _ => unreachable!() };
+            @if hit_limit {
+                @let txn = match txns.iter().rev().find(|t| match t{TransactionView::Trans(_) => true, _=>false}) { Some(TransactionView::Trans(t)) => t, d => {dbg!(d);unreachable!()} };
                 a href=(uri!(my_transactions: before_ms = txn.happened_at.timestamp_millis(), fun_ty = fun_ty.as_str())) { "Next" }
             }
         } @else {
