@@ -479,39 +479,43 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
         .map(|v| if v.direction { (v.amount, 0) } else { (0, v.amount) })
         .fold((0,0), |acc, x| (acc.0 + x.0, acc.1 + x.1));
     let motion = MotionWithCount::from_motion(motion, yes_vote_count as u64, no_vote_count as u64);
-    let voting_html = if let Some(deets) = ctx.deets.as_ref() {
-        let mut agents_vote:Option<MotionVote> = None;
-        for vote in &votes {
-            if vote.user == atoi::atoi::<i64>(deets.discord_user.id.as_bytes()).unwrap() {
-                agents_vote = Some(*vote);
-            }
-        }
-        let avd = agents_vote.map(|v| v.direction);
-        html!{
-            form action={"/motions/" (damm_id) "/vote"} method="post" {
-                input type="hidden" name="csrf" value=(ctx.csrf_token);
-                "Cast "
-                input type="number" name="count" value="0";
-                " vote(s) "
-                br;
-                label {
-                   input type="radio" name="direction" value="for" disabled?[avd == Some(false)] checked?[avd == Some(true)];
-                   " for"
+    let voting_html = if let Some(deets) = ctx.deets.as_ref(){
+        if motion.end_at() > Utc::now() {
+            let mut agents_vote:Option<MotionVote> = None;
+            for vote in &votes {
+                if vote.user == atoi::atoi::<i64>(deets.discord_user.id.as_bytes()).unwrap() {
+                    agents_vote = Some(*vote);
                 }
-                br;
-                label {
-                    input type="radio" name="direction" value="against" disabled?[avd == Some(true)] checked?[avd == Some(false)];
-                    " against"
-                }
-                br;
-                input type="submit" name="submit" value="Go";
             }
+            let avd = agents_vote.map(|v| v.direction);
+            html!{
+                form action={"/motions/" (damm_id) "/vote"} method="post" {
+                    input type="hidden" name="csrf" value=(ctx.csrf_token);
+                    "Cast "
+                    input type="number" name="count" value="0";
+                    " vote(s) "
+                    br;
+                    label {
+                    input type="radio" name="direction" value="for" disabled?[avd == Some(false)] checked?[avd == Some(true)];
+                    " for"
+                    }
+                    br;
+                    label {
+                        input type="radio" name="direction" value="against" disabled?[avd == Some(true)] checked?[avd == Some(false)];
+                        " against"
+                    }
+                    br;
+                    input type="submit" name="submit" value="Go";
+                }
+            }
+        } else {
+            html!{ "This motion has expired." }
         }
     } else {
         html!{ "You must be logged in to vote." }
     };
 
-    Some(page(&mut ctx, format!("Motion#{}", motion.damm_id()), html!{
+    Some(page(&mut ctx, format!("Motion #{}", motion.damm_id()), html!{
         div.motion {
             a href="/" { "Home" }
             (motion_snippet(&motion))
