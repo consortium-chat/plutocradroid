@@ -686,6 +686,7 @@ fn my_transactions(
         pub to_motion:Option<i64>,
         pub to_votes:Option<i64>,
         pub message_id:Option<i64>,
+        pub transfer_ty:String,
     }
     #[derive(Debug,Clone)]
     enum TransactionView {
@@ -714,11 +715,12 @@ fn my_transactions(
                 bh::to_motion,
                 bh::to_votes,
                 bh::message_id,
+                bh::transfer_ty,
             ))
             .filter(bh::user.eq(deets.id()))
             .filter(coalesce_2(bh::ty.nullable().eq(fun_ty.as_option()).nullable(), true))
             .filter(coalesce_2(bh::happened_at.nullable().lt(Utc.timestamp_millis_opt(before_ms).single()).nullable(),true))
-            .filter(bh::from_gen.eq(false))
+            .filter(bh::transfer_ty.ne("generated"))
             .order(bh::happened_at.desc())
             .limit(limit+1);
         info!("{}", diesel::debug_query(&q));
@@ -739,12 +741,13 @@ fn my_transactions(
                     bh::to_motion,
                     bh::to_votes,
                     bh::message_id,
+                    bh::transfer_ty,
                 ))
                 .filter(bh::user.eq(deets.id()))
                 .filter(coalesce_2(bh::ty.nullable().eq(fun_ty.as_option()).nullable(), true))
                 .filter(coalesce_2(bh::happened_at.nullable().lt(Utc.timestamp_millis_opt(before_ms).single()).nullable(),true))
                 .filter(bh::happened_at.gt(last.happened_at))
-                .filter(bh::from_gen.eq(true))
+                .filter(bh::transfer_ty.eq("generated"))
                 .order(bh::happened_at.desc())
                 .get_results(&*ctx)
                 .unwrap()
@@ -820,15 +823,26 @@ fn my_transactions(
                                     }
                                 }
                                 td {
-                                    @if let Some(other_party) = &txn.other_party {
+                                    @if ["give", "admin_give"].contains(&txn.transfer_ty.as_str()) {
+                                        @if txn.transfer_ty.as_str() == "admin_give" {
+                                            "admin "
+                                        }
                                         @if txn.sign < 0 {
                                             "transfer to "
                                         } @else {
                                             "transfer from "
                                         }
                                         "user#\u{200B}"
-                                        (other_party)
+                                        (txn.other_party.unwrap())
+                                    } @else if txn.transfer_ty.as_str() == "motion_create" {
+                                        @let damm_id = crate::damm::add_to_str(txn.to_motion.unwrap().to_string());
+                                        "1 vote, created "
+                                        a href=(uri!(motion_listing:damm_id = &damm_id)) {
+                                            "motion #"
+                                            (&damm_id)
+                                        }
                                     } @else if let (Some(motion_id), Some(votes)) = (&txn.to_motion, &txn.to_votes) {
+                                        // transfer_ty == "motion_vote"
                                         @let damm_id = crate::damm::add_to_str(motion_id.to_string());
                                         (votes)
                                         " vote(s) on "
@@ -836,7 +850,7 @@ fn my_transactions(
                                             "motion #"
                                             (&damm_id)
                                         }
-                                    } @else if txn.message_id.is_some() && txn.other_party.is_none() {
+                                    } @else if ["admin_fabricate","command_fabricate"].contains(&txn.transfer_ty.as_str()) {
                                         "fabrication"
                                     }
                                     " "

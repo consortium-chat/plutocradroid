@@ -30,6 +30,7 @@ table! {
         is_super -> Bool,
         announcement_message_id -> Nullable<Int8>,
         needs_update -> Bool,
+        motioned_by -> Int8,
     }
 }
 
@@ -54,7 +55,6 @@ table! {
         rowid -> Int8,
         ty -> Text,
         from_user -> Nullable<Int8>,
-        from_gen -> Bool,
         quantity -> Int8,
         to_user -> Nullable<Int8>,
         from_balance -> Nullable<Int8>,
@@ -64,6 +64,7 @@ table! {
         to_motion -> Nullable<Int8>,
         to_votes -> Nullable<Int8>,
         comment -> Nullable<Text>,
+        transfer_ty -> Text,
     }
 }
 

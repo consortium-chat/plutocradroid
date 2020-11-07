@@ -359,11 +359,11 @@ pub fn bot_main() {
                     let pc_balance = balance("pc");
                     diesel::insert_into(tdsl::transfers).values((
                         tdsl::ty.eq("pc"),
-                        tdsl::from_gen.eq(true),
                         tdsl::quantity.eq(gen_balance),
                         tdsl::to_user.eq(userid),
                         tdsl::to_balance.eq(pc_balance + gen_balance),
                         tdsl::happened_at.eq(now),
+                        tdsl::transfer_ty.eq("generated"),
                     )).execute(&*conn).unwrap();
                 }
 
@@ -514,7 +514,8 @@ fn fabricate(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult 
             tdsl::to_balance.eq(prev_balance + how_many),
             tdsl::happened_at.eq(chrono::Utc::now()),
             tdsl::message_id.eq(msg.id.0 as i64),
-            tdsl::ty.eq(ty.db_name())
+            tdsl::ty.eq(ty.db_name()),
+            tdsl::transfer_ty.eq("command_fabricate"),
         )).execute(&*conn)?;
 
         Ok(())
@@ -728,6 +729,7 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
                 happened_at:chrono::DateTime<chrono::Utc>,
                 message_id:i64,
                 ty:String,
+                transfer_ty:&'static str,
             }
 
             let from_balance;
@@ -749,6 +751,7 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
                 happened_at: chrono::Utc::now(),
                 message_id: msg.id.0 as i64,
                 ty: ty.db_name().into(),
+                transfer_ty: "give",
             };
 
             diesel::insert_into(schema::transfers::table).values(&t).execute(&*conn)?;
@@ -920,6 +923,9 @@ fn motion_common(ctx:&mut Context, msg:&Message, args:Args, is_super: bool) -> C
             tdsl::quantity.eq(VOTE_BASE_COST as i64),
             tdsl::happened_at.eq(chrono::Utc::now()),
             tdsl::message_id.eq(msg.id.0 as i64),
+            tdsl::to_motion.eq(motion_id),
+            tdsl::to_votes.eq(1),
+            tdsl::transfer_ty.eq("motion_create"),
         )).execute(&*conn)?;
 
         Ok(())
@@ -1211,6 +1217,7 @@ pub fn vote_common(
                     tdsl::message_id.eq(command_message_id),
                     tdsl::to_motion.eq(motion_id),
                     tdsl::to_votes.eq(vote_count),
+                    tdsl::transfer_ty.eq("motion_vote"),
                 )).execute(&*conn)?;
                 //dbg!();
 
