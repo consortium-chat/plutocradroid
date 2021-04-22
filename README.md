@@ -2,6 +2,8 @@
 
 *Plutocracy* - A system of government in which the wealthy rule.
 
+For build & development options see **Developing** below.
+
 ## Commands
 
 I suppose something is better than nothing, so here's something:
@@ -125,3 +127,24 @@ Clicking any of the numbers casts that number of votes. If you have not previous
 You cannot retract votes. Un-reacting does nothing except allow you to react again, voting that many more times.
 
 Generally, you'll want to click "yes" or "no" and then as many numbers as you like. The numbers are chosen such that any number of votes from 0 to 199 can be cast purely from the reactions, without un-reacting.
+
+# Building
+
+Plutocradroid requires rust nightly features. Install [`rustup`](https://rustup.rs/).
+
+Install nightly rust
+
+    rustup install nightly
+
+Install dev dependencies (debian/ubuntu)
+
+    apt install libssl-dev libpq-dev
+
+Build&run project
+
+    RUN_BOT=1 cargo run
+    RUN_WEB2=1 cargo run
+
+Build in release mode (binary will be in `target/release/plutocradroid`)
+
+    cargo build --release
