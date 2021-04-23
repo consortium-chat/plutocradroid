@@ -138,7 +138,7 @@ Install nightly rust
 
 Install dev dependencies (debian/ubuntu)
 
-    apt install libssl-dev libpq-dev
+    apt install pkg-config build-essential libssl-dev libpq-dev
 
 Build&run project
 
