@@ -15,6 +15,7 @@ update transfers t set transfer_ty = 'generated' where t.from_gen and t.transfer
 -- (has comment -> made from sql command) may not hold up in the future, but should be good for now
 update transfers t set transfer_ty = 'admin_fabricate' where t.comment IS NOT NULL and t.from_user IS NULL and t.transfer_ty IS NULL;
 update transfers t set transfer_ty = 'admin_give' where t.comment IS NOT NULL and t.from_user IS NOT NULL and t.transfer_ty IS NULL;
+update transfers t set transfer_ty = 'admin_fabricate', comment = 'Initial constitutional allotments' where t.happened_at in ('2020-03-24 18:22:11.386675+00', '2020-03-24 18:22:31.650116+00', '2020-03-24 18:22:56.603281+00', '2020-03-24 18:23:29.657751+00') and t.transfer_ty IS NULL;
 
 update transfers t set transfer_ty = 'give' where t.to_user IS NOT NULL and t.from_user IS NOT NULL and t.transfer_ty IS NULL;
 update transfers t set transfer_ty = 'command_fabricate' where t.message_id IS NOT NULL and t.from_user IS NULL and t.transfer_ty IS NULL;
