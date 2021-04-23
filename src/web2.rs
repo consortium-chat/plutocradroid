@@ -145,6 +145,20 @@ impl <'a, 'r> FromRequest<'a, 'r> for Deets {
 }
 
 #[derive(Debug)]
+struct Referer<'a>(&'a str);
+
+impl<'a, 'r> FromRequest<'a, 'r> for Referer<'a> {
+    type Error = ();
+
+    fn from_request(request: &'a Request<'r>) -> Outcome<Self, Self::Error> {
+        match request.headers().get_one("Referer") {
+            None => Outcome::Failure((rocket::http::Status::BadRequest,())),
+            Some(val) => Outcome::Success(Referer(val)),
+        }
+    }
+}
+
+#[derive(Debug)]
 enum CommonContextError {
     DeetsError(DeetsFail),
     DbConnError(()),
@@ -906,6 +920,9 @@ fn my_transactions(
     }))
 }
 
+/// This is the 2nd step in a 3-step process
+/// Agent has just been redirected from discord, and the url params includes a token we need to auth with discord.
+/// Sets cookies and redirects to /get-deets
 #[get("/oauth-finish")]
 fn oauth_finish(token: TokenResponse<DiscordOauth>, mut cookies: Cookies<'_>) -> Redirect {
     cookies.add_private(
@@ -927,6 +944,13 @@ fn oauth_finish(token: TokenResponse<DiscordOauth>, mut cookies: Cookies<'_>) ->
     Redirect::to("/get-deets")
 }
 
+/// This is the 3rd step in a 3-step process
+/// There's no reason this should exist. But for some reason it just wasn't working otherwise.
+/// In theory, this should all be something I could do in /oauth-finish
+/// This makes the user wait extra long for no good reason.
+/// This asks discord (synchonously, mumble grumble) for users details (username, discriminator, id)
+/// and stores that in the "deets" cookie. The agent is "logged in"
+/// Redirects to whatevers in "login_redirect" or / if unset
 #[get("/get-deets")]
 fn get_deets(
     mut cookies: Cookies<'_>
@@ -954,21 +978,39 @@ fn get_deets(
             .http_only(true)
             .finish()
     );
-    Ok(Redirect::to("/"))
+    match cookies.get("login_redirect") {
+        None => Ok(Redirect::to("/")),
+        Some(c) => {
+            let url = c.value().to_string();
+            let c = c.clone();
+            cookies.remove(c);
+            return Ok(Redirect::to(url))
+        },
+    }
 }
 
+/// This is the 1st step in a 3-step process to a discord OAUTH login.
+/// It stores the URL to eventually redirect back to at the end in a cookie, then redirects to discord.
+/// From there, the agent logs into discord and authorizes the app. Discord then redirects to /oauth-finish
 #[post("/login/discord", data = "<data>")]
 fn login(
     oauth2: OAuth2<DiscordOauth>,
     mut cookies: Cookies<'_>,
+    maybe_referer: Option<Referer>,
     data: LenientForm<CSRFForm>,
 ) -> Result<Redirect, rocket::http::Status> {
     if cookies.get("csrf_protection_token").map(|token| token.value()) != Some(data.csrf.as_str()) {
         return Err(rocket::http::Status::BadRequest);
     }
+    if let Some(referer) = maybe_referer {
+        cookies.add(Cookie::build("login_redirect", referer.0.to_string()).finish());
+    } else {
+        cookies.remove(Cookie::named("login_redirct"));
+    }
+    
     Ok(oauth2.get_redirect(&mut cookies, &["identify"]).unwrap())
 }
-
+ 
 #[post("/logout", data = "<data>")]
 fn logout(
     mut ctx: CommonContext,
