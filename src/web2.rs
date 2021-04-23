@@ -920,6 +920,28 @@ fn my_transactions(
     }))
 }
 
+/// This is the 1st step in a 3-step process to a discord OAUTH login.
+/// It stores the URL to eventually redirect back to at the end in a cookie, then redirects to discord.
+/// From there, the agent logs into discord and authorizes the app. Discord then redirects to /oauth-finish
+#[post("/login/discord", data = "<data>")]
+fn login(
+    oauth2: OAuth2<DiscordOauth>,
+    mut cookies: Cookies<'_>,
+    maybe_referer: Option<Referer>,
+    data: LenientForm<CSRFForm>,
+) -> Result<Redirect, rocket::http::Status> {
+    if cookies.get("csrf_protection_token").map(|token| token.value()) != Some(data.csrf.as_str()) {
+        return Err(rocket::http::Status::BadRequest);
+    }
+    if let Some(referer) = maybe_referer {
+        cookies.add(Cookie::build("login_redirect", referer.0.to_string()).finish());
+    } else {
+        cookies.remove(Cookie::named("login_redirct"));
+    }
+    
+    Ok(oauth2.get_redirect(&mut cookies, &["identify"]).unwrap())
+}
+
 /// This is the 2nd step in a 3-step process
 /// Agent has just been redirected from discord, and the url params includes a token we need to auth with discord.
 /// Sets cookies and redirects to /get-deets
@@ -987,28 +1009,6 @@ fn get_deets(
             return Ok(Redirect::to(url))
         },
     }
-}
-
-/// This is the 1st step in a 3-step process to a discord OAUTH login.
-/// It stores the URL to eventually redirect back to at the end in a cookie, then redirects to discord.
-/// From there, the agent logs into discord and authorizes the app. Discord then redirects to /oauth-finish
-#[post("/login/discord", data = "<data>")]
-fn login(
-    oauth2: OAuth2<DiscordOauth>,
-    mut cookies: Cookies<'_>,
-    maybe_referer: Option<Referer>,
-    data: LenientForm<CSRFForm>,
-) -> Result<Redirect, rocket::http::Status> {
-    if cookies.get("csrf_protection_token").map(|token| token.value()) != Some(data.csrf.as_str()) {
-        return Err(rocket::http::Status::BadRequest);
-    }
-    if let Some(referer) = maybe_referer {
-        cookies.add(Cookie::build("login_redirect", referer.0.to_string()).finish());
-    } else {
-        cookies.remove(Cookie::named("login_redirct"));
-    }
-    
-    Ok(oauth2.get_redirect(&mut cookies, &["identify"]).unwrap())
 }
  
 #[post("/logout", data = "<data>")]
