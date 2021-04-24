@@ -1,6 +1,7 @@
 use std::fs;
 use vergen::{ConstantsFlags, generate_cargo_keys};
 use sha2::{Sha224, Digest};
+use ructe::Ructe;
 
 fn static_gen() {
     println!("cargo:rerun-if-changed=static");
@@ -88,4 +89,5 @@ fn main() {
 
     generate_cargo_keys(flags).unwrap();
     static_gen();
+    Ructe::from_env().unwrap().compile_templates("templates").unwrap();
 }

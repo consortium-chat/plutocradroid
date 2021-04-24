@@ -1,0 +1,17 @@
+@(title: Cow<str>, content: Content)
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>@title</title>
+        <link rel="stylesheet" href="/@static_path!(main.css)" />
+        <link rel="icon" type="image/png" href="/@static_path!(favicon.ico)" />
+    </head>
+    <body>
+        <div class="container">
+            @content
+            <small class="build-info">
+                Plutocradroid @env!("VERGEN_SEMVER_LIGHTWEIGHT") commit @env!("VERGEN_SHA_SHORT") built for @env!("VERGEN_TARGET_TRIPLE") at @env!("VERGEN_BUILD_TIMESTAMP")
+            </small>
+        </div>
+    </body>
+</html>
