@@ -907,6 +907,7 @@ fn motion_common(ctx:&mut Context, msg:&Message, args:Args, is_super: bool) -> C
             mdsl::motioned_at.eq(now),
             mdsl::last_result_change.eq(now),
             mdsl::is_super.eq(is_super),
+            mdsl::motioned_by.eq(msg.author.id.0 as i64),
         )).returning(mdsl::rowid).get_result(&*conn)?;
 
         diesel::insert_into(mvdsl::motion_votes).values((
