@@ -24,6 +24,7 @@ use regex::Regex;
 use diesel::connection::Connection;
 
 use crate::is_win::is_win;
+use crate::tasks;
 
 struct DbPoolKey;
 impl serenity::prelude::TypeMapKey for DbPoolKey {
@@ -77,14 +78,14 @@ lazy_static! {
     pub static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::hours(48);
 }
 
-const VOTE_BASE_COST:u16 = 40;
+pub const VOTE_BASE_COST:u16 = 40;
 #[cfg(not(feature = "debug"))]
-const MOTIONS_CHANNEL:u64 = 609093491150028800; //bureaucracy channel
+pub const MOTIONS_CHANNEL:u64 = 609093491150028800; //bureaucracy channel
 #[cfg(feature = "debug")]
 //const MOTIONS_CHANNEL:u64 = 694013828362534983; //pluto-dev channel
 //const MOTIONS_CHANNEL:u64 = 610387757818183690; //test channel in shelvacuisawesomeserver
 //const MOTIONS_CHANNEL:u64 = 560918427091468387; //spam channel
-const MOTIONS_CHANNEL:u64 = 770726979456466954; //pluto-beta-messages in CONceptualization
+pub const MOTIONS_CHANNEL:u64 = 770726979456466954; //pluto-beta-messages in CONceptualization
 
 trait FromCommandArgs : Sized {
     fn from_command_args(ctx: &Context, msg: &Message, arg: &str) -> Result<Self, &'static str>;
@@ -242,140 +243,28 @@ pub fn bot_main() {
     let cnh = Arc::clone(&client.cache_and_http);
     let announce_threads_conn = arc_pool.get().unwrap();
     thread::spawn(move || {
-        use diesel::prelude::*;
-        use schema::motions::dsl as mdsl;
-        use schema::motion_votes::dsl as mvdsl;
         let conn = announce_threads_conn;
         
         loop {
-            std::thread::sleep(Duration::from_millis(500));
-            let now = chrono::Utc::now();
-            let motions:Vec<(String, i64, bool)> = mdsl::motions
-                .filter(mdsl::announcement_message_id.is_null())
-                .filter(mdsl::last_result_change.lt(now - *MOTION_EXPIRATION))
-                .select((mdsl::motion_text, mdsl::rowid, mdsl::is_super))
-                .get_results(&*conn).unwrap();
-            for (motion_text, motion_id, is_super) in &motions {
-                #[derive(Queryable,Debug)]
-                struct MotionVote {
-                    user:i64,
-                    amount:i64,
-                    direction:bool,
-                }
-                let votes:Vec<MotionVote> = mvdsl::motion_votes
-                    .filter(mvdsl::motion.eq(motion_id))
-                    .select((mvdsl::user, mvdsl::amount, mvdsl::direction))
-                    .get_results(&*conn).unwrap();
-                let mut yes_votes = 0;
-                let mut no_votes = 0;
-                for vote in &votes {
-                    if vote.direction {
-                        yes_votes += vote.amount;
-                    } else {
-                        no_votes += vote.amount;
-                    }
-                }
-                let pass = is_win(yes_votes, no_votes, *is_super);
-                let pass_msg = if pass { "PASSED" } else { "FAILED" }; 
-                let announce_msg = serenity::model::id::ChannelId::from(MOTIONS_CHANNEL).send_message(&cnh.http, |m| {
-                    m.embed(|e| {
-                        e.title(
-                            format!(
-                                "Vote ended! Motion #{} has {}.",
-                                damm::add_to_str(motion_id.to_string()), 
-                                pass_msg,
-                            )
-                        );
-                        if pass { e.description(motion_text); }
-                        e.timestamp(&now);
-                        if pass {
-                            e.field("Votes", format!("**for {}**/{} against", yes_votes, no_votes), false);
-                        }else{
-                            e.field("Votes", format!("**against {}**/{} for", no_votes, yes_votes), false);
-                        }
-                        e
-                    })
-                }).unwrap();
-
-                diesel::update(mdsl::motions.filter(mdsl::rowid.eq(motion_id))).set(
-                    mdsl::announcement_message_id.eq(announce_msg.id.0 as i64)
-                ).execute(&*conn).unwrap();
+            std::thread::sleep(Duration::from_millis(500));           
+            match tasks::process_motion_completions(&conn, Arc::clone(&cnh)) {
+                Ok(()) => (),
+                Err(e) => warn!("Could not query for completed motions, {:?}", e),
             }
-
-            let mmids:Vec<i64> = mdsl::motions
-                .filter(mdsl::announcement_message_id.is_null())
-                .filter(mdsl::needs_update)
-                .select(mdsl::bot_message_id)
-                .get_results(&*conn)
-                .unwrap();
-            for mmid in &mmids {
-                let mut motion_message = cnh.http.get_message(MOTIONS_CHANNEL, *mmid as u64).unwrap();
-                update_motion_message(Arc::clone(&cnh.http), &*conn, &mut motion_message).unwrap(); 
-            }
-
         }
     });
 
     let threads_conn = arc_pool.get().unwrap();
     thread::spawn(move || {
-        // use schema::gen::dsl as gdsl;
-        use schema::transfers::dsl as tdsl;
-        use diesel::prelude::*;
-        use view_schema::balance_history::dsl as bhdsl;
-        use schema::single::dsl as sdsl;
         let conn = threads_conn;
 
         loop {
             /* not properly locking, but should only have one thread trying to access */
             std::thread::sleep(Duration::from_millis(500));
-            let now = chrono::Utc::now();
-            let last_gen:chrono::DateTime<chrono::Utc> = sdsl::single.select(sdsl::last_gen).get_result(&*conn).unwrap();
-            if now - last_gen < *GENERATE_EVERY {
-                thread::sleep(std::time::Duration::from_secs(1));
-                continue
+            match tasks::process_generators(&*conn) {
+                Ok(()) => (),
+                Err(e) => warn!("Could process generator payouts, {:?}", e),
             }
-            eprintln!("Generating some political capital!");
-            let start_chrono = chrono::Utc::now();
-            let start_instant = std::time::Instant::now();
-            conn.transaction::<_, diesel::result::Error, _>(|| {
-                diesel::sql_query("LOCK TABLE transfers IN EXCLUSIVE MODE;").execute(&*conn)?;
-
-                let users:Vec<Option<i64>> = tdsl::transfers.select(tdsl::to_user).distinct().filter(tdsl::ty.eq("gen")).filter(tdsl::to_user.is_not_null()).get_results(&*conn).unwrap();
-                for userid_o in &users {
-                    let userid = userid_o.unwrap();
-                    let balance = |ty_str:&'static str| {
-                        bhdsl::balance_history
-                            .select(bhdsl::balance)
-                            .filter(bhdsl::user.eq(userid))
-                            .filter(bhdsl::ty.eq(ty_str))
-                            .order(bhdsl::happened_at.desc())
-                            .limit(1)
-                            .get_result(&*conn)
-                            .optional()
-                            .unwrap()
-                            .unwrap_or(0):i64
-                    };
-                    let gen_balance = balance("gen");
-                    let pc_balance = balance("pc");
-                    diesel::insert_into(tdsl::transfers).values((
-                        tdsl::ty.eq("pc"),
-                        tdsl::quantity.eq(gen_balance),
-                        tdsl::to_user.eq(userid),
-                        tdsl::to_balance.eq(pc_balance + gen_balance),
-                        tdsl::happened_at.eq(now),
-                        tdsl::transfer_ty.eq("generated"),
-                    )).execute(&*conn).unwrap();
-                }
-
-                diesel::update(sdsl::single).set(sdsl::last_gen.eq(last_gen + *GENERATE_EVERY)).execute(&*conn)?;
-                
-                Ok(())
-            }).unwrap();
-            let end_instant = std::time::Instant::now();
-            let end_chrono = chrono::Utc::now();
-            let chrono_dur = end_chrono - start_chrono;
-
-            eprintln!("PC generation took {} kernel seconds/{} RTC seconds", (end_instant - start_instant).as_secs_f64(), chrono_dur);
         }
     });
     drop(arc_pool);
@@ -392,7 +281,7 @@ pub fn bot_main() {
     }
 }
 
-fn update_motion_message(
+pub fn update_motion_message(
     ctx: impl serenity::http::CacheHttp,
     conn: &diesel::pg::PgConnection,
     msg: &mut serenity::model::channel::Message
