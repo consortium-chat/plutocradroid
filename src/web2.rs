@@ -290,7 +290,7 @@ fn motion_snippet(
                     " "
                 }
                 time datetime=(motion.end_at().to_rfc3339()) {
-                    (motion.end_at().to_rfc2822())
+                    (motion.end_at().with_timezone(&chrono_tz::America::Los_Angeles).to_rfc2822())
                 }
             }
         }
@@ -833,7 +833,7 @@ fn my_transactions(
                             tr.transaction {
                                 td {
                                     time datetime=(txn.happened_at.to_rfc3339()) {
-                                        (txn.happened_at.to_rfc3339_opts(SecondsFormat::Secs, true))
+                                        (txn.happened_at.with_timezone(&chrono_tz::America::Los_Angeles).to_rfc3339_opts(SecondsFormat::Secs, true))
                                     }
                                 }
                                 td {
