@@ -177,7 +177,7 @@ impl EventHandler for Handler {
     }
 }
 
-fn name_of(u:UserId) -> Cow<'static, str> {
+pub fn name_of(u:UserId) -> Cow<'static, str> {
     match u.0 {
         165858230327574528 => "Shelvacu".into(),
         125003180219170816 => "Colin".into(),

@@ -12,9 +12,11 @@ use rocket::fairing;
 use maud::{html, Markup};
 use diesel::prelude::*;
 use chrono::{DateTime, Utc, SecondsFormat, TimeZone};
+use serenity::model::prelude::UserId;
 
 use crate::{schema, rocket_diesel};
 use crate::models::{Motion, MotionVote, MotionWithCount};
+use crate::bot::name_of;
 
 fn generate_state<A: rand::RngCore + rand::CryptoRng>(rng: &mut A) -> Result<String, String> {
     let mut buf = [0; 16]; // 128 bits
