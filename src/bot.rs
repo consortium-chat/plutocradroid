@@ -188,10 +188,10 @@ fn name_of(u:UserId) -> Cow<'static, str> {
 
 fn nth_vote_cost(n:i64) -> Result<i64,()> {
     let res:f64 = (VOTE_BASE_COST as f64) * (1.05f64).powf((n-1) as f64);
-    if res < 0.0 || res > 4611686018427388000.0 {
-        Err(())
-    } else {
+    if (0.0..4611686018427388000.0).contains(&res) {
         Ok(res as i64)
+    } else {
+        Err(())
     }
 }
 
@@ -550,7 +550,7 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
             .optional()?;
         if let Some(ty) = alias {
             maybe_ty = Some(ty);
-        } else if let Some(idx) = arg.find(|c| !('0' <= c && c <= '9')) {
+        } else if let Some(idx) = arg.find(|c| !('0'..='9').contains(&c)) {
             if idx == 0 {
                 return Err(format!("Invalid item type {}", arg).into());
             }

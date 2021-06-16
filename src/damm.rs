@@ -35,7 +35,7 @@ pub fn add_to_str<S: Into<String>>(s:S) -> String {
     let mut strr:String = s.into();
     let mut digits:Vec<u8> = Vec::new();
     for c in strr.chars() {
-        if '0' <= c && c <= '9' {
+        if ('0'..='9').contains(&c) {
             digits.push(((c as u32) - ('0' as u32)) as u8);
         }else{
             panic!("invalid digit");
@@ -52,7 +52,7 @@ pub fn add_to_str<S: Into<String>>(s:S) -> String {
 pub fn validate(s:&str) -> Option<Vec<u8>> {
     let mut digits:Vec<u8> = Vec::with_capacity(s.len());
     for c in s.chars() {
-        if '0' <= c && c <= '9' {
+        if ('0'..='9').contains(&c) {
             digits.push(((c as u32) - ('0' as u32)) as u8);
         }else{
             return None;
@@ -70,7 +70,7 @@ pub fn validate_ascii(s:&str) -> Option<Vec<u8>> {
     let mut low_digits:Vec<u8> = Vec::with_capacity(s.len());
     let mut ascii_digits:Vec<u8> = Vec::with_capacity(s.len());
     for c in s.chars() {
-        if '0' <= c && c <= '9' {
+        if ('0'..='9').contains(&c) {
             low_digits.push(((c as u32) - ('0' as u32)) as u8);
             ascii_digits.push(c as u8);
         }else{

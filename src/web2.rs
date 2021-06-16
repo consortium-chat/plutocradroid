@@ -262,6 +262,7 @@ impl fairing::Fairing for SecureHeaders {
     }
 }
 
+#[allow(clippy::branches_sharing_code)]
 fn motion_snippet(
     motion: &MotionWithCount
 ) -> Markup {
@@ -633,7 +634,7 @@ fn index(mut ctx: CommonContext, filter: MotionListFilter) -> impl Responder<'st
         }
         @for motion in &motions {
             div.motion {
-                (motion_snippet(&motion))
+                (motion_snippet(motion))
             }
         }
         @if motions.is_empty() {
@@ -911,7 +912,7 @@ fn my_transactions(
                 }
             }
             @if hit_limit {
-                @let txn = match txns.iter().rev().find(|t| match t{TransactionView::Trans(_) => true, _=>false}) { Some(TransactionView::Trans(t)) => t, d => {dbg!(d);unreachable!()} };
+                @let txn = match txns.iter().rev().find(|t| matches!(t, TransactionView::Trans(_))) { Some(TransactionView::Trans(t)) => t, d => {dbg!(d);unreachable!()} };
                 a href=(uri!(my_transactions: before_ms = txn.happened_at.timestamp_millis(), fun_ty = fun_ty.as_str())) { "Next" }
             }
         } @else {
@@ -1006,7 +1007,7 @@ fn get_deets(
             let url = c.value().to_string();
             let c = c.clone();
             cookies.remove(c);
-            return Ok(Redirect::to(url))
+            Ok(Redirect::to(url))
         },
     }
 }
