@@ -539,7 +539,7 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
             hr;
             @for vote in &votes {
                 div.motion-vote {
-                    h5 { (vote.user) }
+                    h5 { (name_of(UserId::from(vote.user as u64))) }
                     span {
                         (vote.amount)
                         @if vote.direction {
