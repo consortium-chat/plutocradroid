@@ -26,6 +26,8 @@ use diesel::connection::Connection;
 use crate::is_win::is_win;
 use crate::tasks;
 
+const RUB_IT_IN:bool = false;
+
 struct DbPoolKey;
 impl serenity::prelude::TypeMapKey for DbPoolKey {
     type Value = Arc<diesel::r2d2::Pool<diesel::r2d2::ConnectionManager<diesel::PgConnection>>>;
@@ -175,6 +177,15 @@ impl EventHandler for Handler {
     }
 }
 
+fn name_of(u:UserId) -> Cow<'static, str> {
+    match u.0 {
+        165858230327574528 => "Shelvacu".into(),
+        125003180219170816 => "Colin".into(),
+        155438323354042368 => "Ben".into(),
+        n => n.to_string().into(),
+    }
+}
+
 fn nth_vote_cost(n:i64) -> Result<i64,()> {
     let res:f64 = (VOTE_BASE_COST as f64) * (1.05f64).powf((n-1) as f64);
     if res < 0.0 || res > 4611686018427388000.0 {
@@ -319,7 +330,7 @@ pub fn update_motion_message(
                 e.field("Votes", format!("**against {}**/{} for", no_votes, yes_votes), false);
             }
             for vote in &votes[0..std::cmp::min(votes.len(),21)] {
-                e.field(serenity::model::id::UserId::from(vote.user as u64), format!("{} {}", vote.amount, if vote.direction {"for"} else {"against"}), true);
+                e.field(name_of(UserId::from(vote.user as u64)), format!("{} {}", vote.amount, if vote.direction {"for"} else {"against"}), true);
             }
 
             if votes.len() > 21 {
@@ -776,13 +787,14 @@ fn motion_common(ctx:&mut Context, msg:&Message, args:Args, is_super: bool) -> C
         let cap_label = if is_super { "Supermotion" } else { "Simple Motion" };
         let bot_msg = serenity::model::id::ChannelId(MOTIONS_CHANNEL).send_message(&ctx, |m| {
             m.content(format!(
-                "A motion has been called by {}\n`$vote {}` to vote!",
+                "A motion has been called by {}\n`$vote {}` to vote!{}",
                 msg.author.mention(),
                 damm::add_to_str(motion_id.to_string()),
+                if is_super && RUB_IT_IN { " <!@155438323354042368> this is a SUPER motion, no complaining." } else { "" }
             )).embed(|e| {
                 e.field(cap_label, motion_text, false)
                 .field("Votes", "**for 1**/0 against", false)
-                .field(msg.author.mention(), "1 for", true)
+                .field(name_of(msg.author.id), "1 for", true)
             })
         }).unwrap();
 
