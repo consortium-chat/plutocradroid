@@ -1498,6 +1498,7 @@ dependencies = [
  "sha2",
  "time",
  "tokio",
+ "tokio-diesel",
  "vergen",
 ]
 
@@ -2373,6 +2374,18 @@ dependencies = [
  "pin-project-lite",
  "tokio-macros",
  "winapi",
+]
+
+[[package]]
+name = "tokio-diesel"
+version = "0.3.0"
+source = "git+https://github.com/mehcode/tokio-diesel?rev=f4af425#f4af42558246ab323600622ba8d08803d3c18842"
+dependencies = [
+ "async-trait",
+ "diesel",
+ "futures",
+ "r2d2",
+ "tokio",
 ]
 
 [[package]]

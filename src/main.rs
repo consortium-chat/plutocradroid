@@ -19,7 +19,6 @@ mod web2;
 mod is_win;
 mod static_responders;
 mod tasks;
-mod raii_transaction;
 
 use std::{env,panic,process};
 

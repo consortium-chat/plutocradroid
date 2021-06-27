@@ -4,6 +4,9 @@ use crate::damm;
 
 use std::sync::Arc;
 use std::time::Duration;
+
+use tokio_diesel::*;
+
 use serenity::client::Client;
 use serenity::model::misc::Mentionable;
 use serenity::model::channel::Message;
@@ -30,11 +33,8 @@ use tokio::task;
 
 use async_trait::async_trait;
 
-use crate::raii_transaction::{ConnectionExt, RaiiTransaction};
 use crate::is_win::is_win;
 use crate::tasks;
-
-const RUB_IT_IN:bool = false;
 
 pub type DbPool = diesel::r2d2::Pool<diesel::r2d2::ConnectionManager<diesel::PgConnection>>;
 
@@ -180,16 +180,16 @@ impl EventHandler for Handler {
                         SpecialEmojiAction::Direction(dir) => vote_direction = Some(*dir),
                         SpecialEmojiAction::Amount(a) => vote_count = *a,
                     }
-                    let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get().unwrap();
-                    let resp = vote_common(
-                        &*conn,
+                    let pool = Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap());
+                    let resp = vote_common_async(
+                        pool,
                         vote_direction,
                         vote_count as i64,
-                        user_id.0 as i64,//user_id,
-                        None, //motion_id:Option<i64>,
-                        Some(message_id.0 as i64), //message_id:Option<i64>,
-                        None, //command_message_id:Option<i64>,
-                    );
+                        user_id.0 as i64,
+                        None,
+                        Some(message_id.0 as i64),
+                        None,
+                    ).await;
                     user_id.create_dm_channel(&ctx).await.unwrap().say(&ctx, resp).await.unwrap();
                 }
             }
@@ -237,23 +237,22 @@ pub async fn bot_main() {
     lazy_static::initialize(&USER_PING_RE);
     lazy_static::initialize(&MOTION_EXPIRATION);
 
-    let pool = diesel::r2d2::Builder::new().build(
+    let raw_pool = diesel::r2d2::Builder::new().build(
         diesel::r2d2::ConnectionManager::<diesel::PgConnection>::new(
             &env::var("DATABASE_URL").expect("DATABASE_URL expected")
         )
     ).expect("could not build DB pool");
-    let arc_pool = Arc::new(pool);
+    let arc_pool = Arc::new(raw_pool);
 
     {
-        let conn = arc_pool.get().unwrap();
         use schema::single::dsl::*;
         use diesel::prelude::*;
         use diesel::dsl::*;
-        if !(select(exists(single.filter(enforce_single_row))).get_result(&*conn).unwrap():bool) {
+        if !(select(exists(single.filter(enforce_single_row))).get_result_async(&*arc_pool).await.unwrap():bool) {
             insert_into(single).values((
                 enforce_single_row.eq(true),
                 last_gen.eq(chrono::Utc::now())
-            )).execute(&*conn).unwrap();
+            )).execute_async(&*arc_pool).await.unwrap();
         }
     }
     
@@ -327,17 +326,15 @@ pub async fn update_motion_message(
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
     use diesel::prelude::*;
-
-    let conn = pool.get()?;
     
-    let (motion_text, motion_id, is_super) = mdsl::motions.filter(mdsl::bot_message_id.eq(msg.id.0 as i64)).select((mdsl::motion_text, mdsl::rowid, mdsl::is_super)).get_result(&conn)?:(String, i64, bool);
+    let (motion_text, motion_id, is_super) = mdsl::motions.filter(mdsl::bot_message_id.eq(msg.id.0 as i64)).select((mdsl::motion_text, mdsl::rowid, mdsl::is_super)).get_result_async(&*pool).await?:(String, i64, bool);
     #[derive(Queryable,Debug)]
     struct MotionVote {
         user:i64,
         amount:i64,
         direction:bool,
     }
-    let mut votes:Vec<MotionVote> = mvdsl::motion_votes.filter(mvdsl::motion.eq(motion_id)).select((mvdsl::user, mvdsl::amount, mvdsl::direction)).get_results(&conn)?;
+    let mut votes:Vec<MotionVote> = mvdsl::motion_votes.filter(mvdsl::motion.eq(motion_id)).select((mvdsl::user, mvdsl::amount, mvdsl::direction)).get_results_async(&*pool).await?;
     let mut yes_votes = 0;
     let mut no_votes = 0;
     for vote in &votes {
@@ -369,7 +366,7 @@ pub async fn update_motion_message(
         })
     }).await?;
     let target = mdsl::motions.filter(mdsl::bot_message_id.eq(msg.id.0 as i64));
-    diesel::update(target).set(mdsl::needs_update.eq(false)).execute(&conn).unwrap();
+    diesel::update(target).set(mdsl::needs_update.eq(false)).execute_async(&*pool).await?;
     Ok(())
 }
 
@@ -394,7 +391,7 @@ async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResul
     use diesel::prelude::*;
     use schema::item_types::dsl as it;
     use schema::item_type_aliases::dsl as ita;
-    let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
+    let pool = Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap());
 
     let ty:ItemType;
     let ty_str:String = args.single()?;
@@ -402,9 +399,10 @@ async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResul
         .inner_join(it::item_types)
         .select(it::item_types::all_columns())
         .filter(ita::alias.eq(&ty_str))
-        .get_result(&*conn)
+        .get_result_async(&*pool)
+        .await
         .optional()?;
-    if let Some(it) = alias{
+    if let Some(it) = alias {
         ty = it;
     } else {
         return Err("Unrecognized type".into());
@@ -421,8 +419,7 @@ async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResul
         user = msg.author.id;
     }
 
-    let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
-    conn.transaction::<_, diesel::result::Error, _>(|| {
+    pool.transaction(|txn| {
         use view_schema::balance_history::dsl as bh;
         use schema::transfers::dsl as tdsl;
         let prev_balance:i64 = view_schema::balance_history::table
@@ -432,7 +429,7 @@ async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResul
           .order(bh::happened_at.desc())
           .limit(1)
           .for_update()
-          .get_result(&*conn)
+          .get_result(&*txn)
           .optional()?
           .unwrap_or(0);
         
@@ -444,10 +441,10 @@ async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResul
             tdsl::message_id.eq(msg.id.0 as i64),
             tdsl::ty.eq(ty.db_name()),
             tdsl::transfer_ty.eq("command_fabricate"),
-        )).execute(&*conn)?;
+        )).execute(&*txn)?;
 
         Ok(())
-    })?;
+    }).await?;
 
     msg.reply(&ctx, "Fabricated.").await?;
 
@@ -482,27 +479,25 @@ async fn balances(ctx: &Context, msg: &Message) -> CommandResult {
     use schema::item_types::dsl as it;
     
 
-    let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
+    let pool = Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap());
     let item_types:Vec<ItemType> = it::item_types
-        .get_results(&*conn)?;
+        .get_results_async(&*pool).await?;
     
     let mut balances = Vec::new();
     for it in item_types {
-        let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
         let bal = bh::balance_history
         .select(bh::balance)
         .filter(bh::user.eq(msg.author.id.0 as i64))
         .filter(bh::ty.eq(it.db_name()))
         .order(bh::happened_at.desc())
         .limit(1)
-        .get_result(&*conn)
+        .get_result_async(&*pool)
+        .await
         .optional()
         .map(|opt| opt.unwrap_or(0i64))?:i64;
-        drop(conn);
 
         balances.push((it, bal));
     };
-    drop(conn);
     msg.channel_id.send_message(&ctx, |cm| {
         cm.embed(|e| {
             e.title("Your balances:");
@@ -547,7 +542,7 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
     use diesel::prelude::*;
     use schema::item_types::dsl as it;
     use schema::item_type_aliases::dsl as ita;
-    let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
+    let pool = Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap());
 
     let user_str:String = args.single()?;
     let user = UserId::from_command_args( ctx, msg, &user_str ).await?;
@@ -562,7 +557,8 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
             .inner_join(it::item_types)
             .select(it::item_types::all_columns())
             .filter(ita::alias.eq(&arg))
-            .get_result(&*conn)
+            .get_result_async(&*pool)
+            .await
             .optional()?;
         if let Some(ty) = alias {
             maybe_ty = Some(ty);
@@ -576,7 +572,8 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
                     .inner_join(it::item_types)
                     .select(it::item_types::all_columns())
                     .filter(ita::alias.eq(&ty_str))
-                    .get_result(&*conn)
+                    .get_result_async(&*pool)
+                    .await
                     .optional()?;
                 if let Some(ty) = alias {
                     maybe_ty = Some(ty);
@@ -601,7 +598,7 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
 
         let mut fail:Option<&'static str> = None;
         let ty_copy = ty.clone();
-        conn.transaction::<_, diesel::result::Error, _>(|| {
+        pool.transaction(|txn| {
 
             use view_schema::balance_history::dsl as bh;
             let mut ids = [msg.author.id.0, user.0];
@@ -621,7 +618,7 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
                         .order(bh::happened_at.desc())
                         .limit(1)
                         .for_update()
-                        .get_result(&*conn)
+                        .get_result(&*txn)
                         .optional()?
                         .unwrap_or(0i64)
                 )
@@ -670,10 +667,10 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
                 transfer_ty: "give",
             };
 
-            diesel::insert_into(schema::transfers::table).values(&t).execute(&*conn)?;
+            diesel::insert_into(schema::transfers::table).values(&t).execute(&*txn)?;
 
             Ok(())
-        })?;
+        }).await?;
         if let Some(fail_msg) = fail {
             msg.reply(&ctx, fail_msg).await?;
         }else{
@@ -780,34 +777,31 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
     use view_schema::balance_history::dsl as bhdsl;
     let motion_text = args.rest();
     //let mut motion_message_outer:Option<_> = None;
-    let mut conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
+    let pool = Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap());
 
     let now = chrono::Utc::now();
-    let txn = conn.raii_transaction()?;
+
     let balance:i64 = bhdsl::balance_history
         .select(bhdsl::balance)
         .filter(bhdsl::ty.eq("pc"))
         .filter(bhdsl::user.eq(msg.author.id.0 as i64))
         .order(bhdsl::happened_at.desc())
         .limit(1)
-        .for_update()
-        .get_result(&*txn)?;
+        .get_result_async(&*pool).await?;
     
     if balance < VOTE_BASE_COST as i64 {
         msg.reply(&ctx, "You don't have enough capital.").await?;
-        RaiiTransaction::rollback(txn)?;
         return Ok(());
     }
-
-    let motion_id:i64 = diesel::insert_into(schema::motion_ids::table).default_values().returning(schema::motion_ids::dsl::rowid).get_result(&*txn)?;
+    
+    let motion_id:i64 = diesel::insert_into(schema::motion_ids::table).default_values().returning(schema::motion_ids::dsl::rowid).get_result_async(&*pool).await?;
 
     let cap_label = if is_super { "Supermotion" } else { "Simple Motion" };
-    let bot_msg = serenity::model::id::ChannelId(MOTIONS_CHANNEL).send_message(&ctx, |m| {
+    let mut bot_msg = serenity::model::id::ChannelId(MOTIONS_CHANNEL).send_message(&ctx, |m| {
         m.content(format!(
-            "A motion has been called by {}\n`$vote {}` to vote!{}",
+            "A motion has been called by {}\n`$vote {}` to vote!",
             msg.author.mention(),
-            damm::add_to_str(motion_id.to_string()),
-            if is_super && RUB_IT_IN { " <!@155438323354042368> this is a SUPER motion, no complaining." } else { "" }
+            damm::add_to_str(motion_id.to_string())
         )).embed(|e| {
             e.field(cap_label, motion_text, false)
             .field("Votes", "**for 1**/0 against", false)
@@ -815,41 +809,54 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
         })
     }).await?;
 
-    let mut motion_message = bot_msg.clone();
+    pool.transaction(|txn| {
+        let balance:i64 = bhdsl::balance_history
+            .select(bhdsl::balance)
+            .filter(bhdsl::ty.eq("pc"))
+            .filter(bhdsl::user.eq(msg.author.id.0 as i64))
+            .order(bhdsl::happened_at.desc())
+            .limit(1)
+            .for_update()
+            .get_result(&*txn)?;
+        
+        if balance < VOTE_BASE_COST as i64 {
+            //msg.author is an asshat or was part of an incredibly rare event
+            return Ok(());
+        }
 
-    let motion_id:i64 = diesel::insert_into(mdsl::motions).values((
-        mdsl::rowid.eq(motion_id),
-        mdsl::command_message_id.eq(msg.id.0 as i64),
-        mdsl::bot_message_id.eq(bot_msg.id.0 as i64),
-        mdsl::motion_text.eq(motion_text),
-        mdsl::motioned_at.eq(now),
-        mdsl::last_result_change.eq(now),
-        mdsl::is_super.eq(is_super),
-        mdsl::motioned_by.eq(msg.author.id.0 as i64),
-    )).returning(mdsl::rowid).get_result(&*txn)?;
+        let motion_id:i64 = diesel::insert_into(mdsl::motions).values((
+            mdsl::rowid.eq(motion_id),
+            mdsl::command_message_id.eq(msg.id.0 as i64),
+            mdsl::bot_message_id.eq(bot_msg.id.0 as i64),
+            mdsl::motion_text.eq(motion_text),
+            mdsl::motioned_at.eq(now),
+            mdsl::last_result_change.eq(now),
+            mdsl::is_super.eq(is_super),
+            mdsl::motioned_by.eq(msg.author.id.0 as i64),
+        )).returning(mdsl::rowid).get_result(&*txn)?;
 
-    diesel::insert_into(mvdsl::motion_votes).values((
-        mvdsl::user.eq(msg.author.id.0 as i64),
-        mvdsl::motion.eq(motion_id),
-        mvdsl::direction.eq(true),
-        mvdsl::amount.eq(1)
-    )).execute(&*txn)?;
+        diesel::insert_into(mvdsl::motion_votes).values((
+            mvdsl::user.eq(msg.author.id.0 as i64),
+            mvdsl::motion.eq(motion_id),
+            mvdsl::direction.eq(true),
+            mvdsl::amount.eq(1)
+        )).execute(&*txn)?;
 
-    diesel::insert_into(tdsl::transfers).values((
-        tdsl::from_user.eq(msg.author.id.0 as i64),
-        tdsl::from_balance.eq(balance),
-        tdsl::ty.eq("pc"),
-        tdsl::quantity.eq(VOTE_BASE_COST as i64),
-        tdsl::happened_at.eq(chrono::Utc::now()),
-        tdsl::message_id.eq(msg.id.0 as i64),
-        tdsl::to_motion.eq(motion_id),
-        tdsl::to_votes.eq(1),
-        tdsl::transfer_ty.eq("motion_create"),
-    )).execute(&*txn)?;
+        diesel::insert_into(tdsl::transfers).values((
+            tdsl::from_user.eq(msg.author.id.0 as i64),
+            tdsl::from_balance.eq(balance),
+            tdsl::ty.eq("pc"),
+            tdsl::quantity.eq(VOTE_BASE_COST as i64),
+            tdsl::happened_at.eq(chrono::Utc::now()),
+            tdsl::message_id.eq(msg.id.0 as i64),
+            tdsl::to_motion.eq(motion_id),
+            tdsl::to_votes.eq(1),
+            tdsl::transfer_ty.eq("motion_create"),
+        )).execute(&*txn)?;
 
-    RaiiTransaction::commit(txn)?;
-    //let mut motion_message = ctx.http.get_message(MOTIONS_CHANNEL, motion_id_outer.unwrap() as u64)?;
-    update_motion_message(&ctx, Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap()), &mut motion_message).await?;
+        Ok(())
+    }).await?;
+    update_motion_message(&ctx, Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap()), &mut bot_msg).await?;
     let mut emojis:Vec<_> = (*SPECIAL_EMOJI).iter().collect();
     emojis.sort_unstable_by_key(|(_,a)| match *a {
         SpecialEmojiAction::Direction(false) => -2,
@@ -861,7 +868,7 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
         serenity::model::id::ChannelId::from(MOTIONS_CHANNEL)
             .create_reaction(
                 &ctx,
-                &motion_message,
+                &bot_msg,
                 serenity::model::channel::ReactionType::Custom{
                     animated: false,
                     id: (*emoji_id).into(),
@@ -965,22 +972,19 @@ async fn vote(ctx:&Context, msg:&Message, mut args:Args) -> CommandResult {
                 }
             }
         }
-        //dbg!(&vote_count, &vote_direction);
-        
-        let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
-        let response = vote_common(
-            &*conn,
+
+        let pool = Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap());
+        let resp = vote_common_async(
+            pool,
             vote_direction,
             vote_count,
             msg.author.id.0 as i64,
             Some(motion_id),
             None,
             Some(msg.id.0 as i64),
-        );
-        drop(conn);
-        msg.reply(ctx, response).await.unwrap();
-        
-        //msg.reply(&ctx, "Vote counted!").unwrap();
+        ).await;
+
+        msg.reply(ctx, resp).await.unwrap();
     }else{
         return Err("Invalid motion id, please try again.".into());
     }
@@ -989,6 +993,30 @@ async fn vote(ctx:&Context, msg:&Message, mut args:Args) -> CommandResult {
 
 use std::borrow::Cow;
 
+pub async fn vote_common_async(
+    pool: Arc<DbPool>,
+    vote_direction:Option<bool>,
+    vote_count:i64,
+    user_id:i64,
+    motion_id:Option<i64>,
+    message_id:Option<i64>,
+    command_message_id:Option<i64>,
+) -> Cow<'static, str> {
+    task::spawn_blocking(move || {
+        let conn = pool.get().unwrap();
+        vote_common(
+            &*conn,
+            vote_direction,
+            vote_count,
+            user_id,
+            motion_id,
+            message_id,
+            command_message_id,
+        )
+    }).await.unwrap()
+}
+
+// This function is called from synchronous rocket code, so must remain sync.
 pub fn vote_common(
     //ctx: &Context,
     conn: &diesel::PgConnection,

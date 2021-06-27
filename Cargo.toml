@@ -34,6 +34,7 @@ time = "0.1.43"
 hyper = "0.10.16"
 async-trait = "0.1.50"
 tokio = "1.0.0"
+tokio-diesel = { git = "https://github.com/mehcode/tokio-diesel", rev = "f4af425" }
 
 [build-dependencies]
 vergen = "5"
