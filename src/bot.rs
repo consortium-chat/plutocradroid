@@ -585,7 +585,14 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
 
     let user_str:String = args.single()?;
     let user = UserId::from_command_args( ctx, msg, &user_str ).await?;
-    if check_user && !ctx.cache.users().await.contains_key(&user) {
+    let user_in_guild = if let Some(guild_id) = msg.guild_id {
+        match guild_id.member(ctx,user).await {
+            Ok(_) => true,
+            Err(serenity::prelude::SerenityError::Http(_)) => false,
+            Err(e) => return Err(Box::new(e)),
+        }
+    } else { false };
+    if check_user && !ctx.cache.users().await.contains_key(&user) && !user_in_guild {
         return Err("User not found".into());
     }
     let mut maybe_ty:Option<ItemType> = None;
