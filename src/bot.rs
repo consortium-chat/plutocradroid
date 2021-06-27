@@ -229,11 +229,11 @@ async fn on_dispatch_error_hook(_context: &Context, msg: &Message, error: Dispat
 
 
 #[hook]
-async fn after_hook(_: &Context, _: &Message, cmd_name: &str, error: Result<(), CommandError>) {
+async fn after_hook(ctx: &Context, msg: &Message, _cmd_name: &str, error: Result<(), CommandError>) {
     trace!("after_hook");
     //  Print out an error if it happened
     if let Err(why) = error {
-        println!("Error in {}: {:?}", cmd_name, why);
+        let _ = msg.reply(ctx, why).await;
     }
 }
 
