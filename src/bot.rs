@@ -284,6 +284,7 @@ pub async fn bot_main() {
     let mut client = Client::builder(&env::var("DISCORD_TOKEN").expect("token"))
         .event_handler(Handler)
         .framework(framework)
+        .intents(serenity::client::bridge::gateway::GatewayIntents::GUILD_MEMBERS)
         .await
         .expect("Error creating client");
     trace!("Client configured");
