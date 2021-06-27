@@ -11,7 +11,7 @@ use crate::is_win::is_win;
 
 pub async fn process_generators(
     pool: Arc<DbPool>
-) -> Result<(),CommandError> {
+) -> Result<bool,CommandError> {
     // use schema::gen::dsl as gdsl;
     use schema::transfers::dsl as tdsl;
     use diesel::prelude::*;
@@ -22,7 +22,7 @@ pub async fn process_generators(
     let last_gen:chrono::DateTime<chrono::Utc> = sdsl::single.select(sdsl::last_gen).get_result(&*conn)?;
 
     if now - last_gen < *bot::GENERATE_EVERY {
-        return Ok(());
+        return Ok(false);
     }
     eprintln!("Generating some political capital!");
     let start_chrono = chrono::Utc::now();
@@ -65,7 +65,7 @@ pub async fn process_generators(
     let chrono_dur = end_chrono - start_chrono;
 
     eprintln!("PC generation took {} kernel seconds/{} RTC seconds", (end_instant - start_instant).as_secs_f64(), chrono_dur);
-    Ok(())
+    Ok(true)
 }
 
 pub async fn process_motion_completions(

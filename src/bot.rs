@@ -294,11 +294,19 @@ pub async fn bot_main() {
     let announce_threads_pool = Arc::clone(&arc_pool);
     let announce_threads_http = Arc::clone(&cnh);
     task::spawn(async move {
+        let mut fast = false;
         loop {
-            std::thread::sleep(Duration::from_millis(500));           
+            if !fast {
+                tokio::time::sleep(Duration::from_millis(500));
+            } else {
+                tokio::time::sleep(Duration::from_millis(10));
+            }
             match tasks::process_motion_completions(Arc::clone(&announce_threads_pool), &announce_threads_http).await {
-                Ok(()) => (),
-                Err(e) => warn!("Could not query for completed motions, {:?}", e),
+                Ok(do_fast) => fast = do_fast,
+                Err(e) => {
+                    fast = false;
+                    warn!("Could not query for completed motions, {:?}", e)
+                },
             }
         }
     });
@@ -308,7 +316,7 @@ pub async fn bot_main() {
     task::spawn(async move {
         loop {
             /* not properly locking, but should only have one thread trying to access */
-            std::thread::sleep(Duration::from_millis(500));
+            tokio::time::sleep(Duration::from_millis(500));
             match tasks::process_generators(Arc::clone(&threads_pool)).await {
                 Ok(()) => (),
                 Err(e) => warn!("Could process generator payouts, {:?}", e),
