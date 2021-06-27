@@ -281,12 +281,20 @@ pub async fn bot_main() {
 
 
     // Login with a bot token from the environment
-    let mut client = Client::builder(&env::var("DISCORD_TOKEN").expect("token"))
-        .event_handler(Handler)
-        .framework(framework)
-        .intents(serenity::client::bridge::gateway::GatewayIntents::GUILD_MEMBERS)
-        .await
-        .expect("Error creating client");
+    let mut client = {
+        use serenity::client::bridge::gateway::GatewayIntents;
+        Client::builder(&env::var("DISCORD_TOKEN").expect("token"))
+            .event_handler(Handler)
+            .framework(framework)
+            .intents(
+                GatewayIntents::GUILD_MEMBERS |
+                GatewayIntents::GUILD_MESSAGES |
+                GatewayIntents::GUILD_MESSAGE_REACTIONS |
+                GatewayIntents::DIRECT_MESSAGES
+            )
+            .await
+            .expect("Error creating client")
+    };
     trace!("Client configured");
     let mut write_handle = client.data.write().await;
     write_handle.insert::<DbPoolKey>(Arc::clone(&arc_pool));
