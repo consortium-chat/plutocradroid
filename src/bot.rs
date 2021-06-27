@@ -114,6 +114,7 @@ trait FromCommandArgs : Sized {
 #[async_trait]
 impl FromCommandArgs for UserId {
     async fn from_command_args(ctx: &Context, msg: &Message, arg: &str) -> Result<Self, &'static str> {
+        trace!("from_command_args");
         if arg == "." || arg == "self" {
             return Ok(msg.author.id);
         }
@@ -166,6 +167,7 @@ impl FromCommandArgs for UserId {
 #[serenity::async_trait]
 impl EventHandler for Handler {
     async fn reaction_add(&self, ctx: Context, r: serenity::model::channel::Reaction) {
+        trace!("reaction_add");
         let mut vote_count = 0;
         let mut vote_direction = None;
         let maybe_user_id = r.user_id;
@@ -198,6 +200,7 @@ impl EventHandler for Handler {
 }
 
 pub fn name_of(u:UserId) -> Cow<'static, str> {
+    trace!("name_of");
     match u.0 {
         165858230327574528 => "Shelvacu".into(),
         125003180219170816 => "Colin".into(),
@@ -207,6 +210,7 @@ pub fn name_of(u:UserId) -> Cow<'static, str> {
 }
 
 fn nth_vote_cost(n:i64) -> Result<i64,()> {
+    trace!("nth_vote_cost");
     let res:f64 = (VOTE_BASE_COST as f64) * (1.05f64).powf((n-1) as f64);
     if (0.0..4611686018427388000.0).contains(&res) {
         Ok(res as i64)
@@ -226,6 +230,7 @@ async fn on_dispatch_error_hook(_context: &Context, msg: &Message, error: Dispat
 
 #[hook]
 async fn after_hook(_: &Context, _: &Message, cmd_name: &str, error: Result<(), CommandError>) {
+    trace!("after_hook");
     //  Print out an error if it happened
     if let Err(why) = error {
         println!("Error in {}: {:?}", cmd_name, why);
@@ -233,6 +238,7 @@ async fn after_hook(_: &Context, _: &Message, cmd_name: &str, error: Result<(), 
 }
 
 pub async fn bot_main() {
+    trace!("bot_main begin");
     lazy_static::initialize(&GENERATE_EVERY);
     lazy_static::initialize(&USER_PING_RE);
     lazy_static::initialize(&MOTION_EXPIRATION);
@@ -243,6 +249,8 @@ pub async fn bot_main() {
         )
     ).expect("could not build DB pool");
     let arc_pool = Arc::new(raw_pool);
+
+    trace!("built pool");
 
     {
         use schema::single::dsl::*;
@@ -269,6 +277,7 @@ pub async fn bot_main() {
     framework = framework.group(&GENERAL_GROUP);
     #[cfg(feature = "debug")]
     { framework = framework.group(&GENERAL_GROUP).group(&DEBUG_GROUP); }
+    trace!("framework configured");
 
 
     // Login with a bot token from the environment
@@ -277,6 +286,7 @@ pub async fn bot_main() {
         .framework(framework)
         .await
         .expect("Error creating client");
+    trace!("Client configured");
     let mut write_handle = client.data.write().await;
     write_handle.insert::<DbPoolKey>(Arc::clone(&arc_pool));
     drop(write_handle);
@@ -292,6 +302,7 @@ pub async fn bot_main() {
             }
         }
     });
+    trace!("Made announce thread");
 
     let threads_pool = Arc::clone(&arc_pool);
     task::spawn(async move {
@@ -305,6 +316,7 @@ pub async fn bot_main() {
         }
     });
     drop(arc_pool);
+    trace!("Made process_generators thread");
 
     #[cfg(not(feature = "debug"))]
     println!("Prod mode.");
@@ -312,10 +324,12 @@ pub async fn bot_main() {
     #[cfg(feature = "debug")]
     println!("Debug mode.");
 
+    trace!("about to client.start()");
     // start listening for events by starting a single shard
     if let Err(why) = client.start().await {
         println!("An error occurred while running the client: {:?}", why);
     }
+    warn!("end bot_main, should never end");
 }
 
 pub async fn update_motion_message(
@@ -323,6 +337,7 @@ pub async fn update_motion_message(
     pool: Arc<DbPool>,
     msg: &mut serenity::model::channel::Message
 ) -> CommandResult {
+    trace!("update_motion_message");
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
     use diesel::prelude::*;
@@ -373,6 +388,7 @@ pub async fn update_motion_message(
 #[command]
 #[num_args(1)]
 async fn hack_message_update(ctx: &Context, _msg: &Message, mut args: Args) -> CommandResult {
+    trace!("hack_message_update");
     let motion_message_id:u64 = args.single()?;
     let mut motion_message = ctx.http.get_message(MOTIONS_CHANNEL, motion_message_id).await?;
     update_motion_message(ctx, Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap()), &mut motion_message).await
@@ -380,6 +396,7 @@ async fn hack_message_update(ctx: &Context, _msg: &Message, mut args: Args) -> C
 
 #[command]
 async fn ping(ctx: &Context, msg: &Message) -> CommandResult {
+    trace!("ping");
     msg.reply(ctx, "The use of such childish terminology to describe a professional sport played in the olympics such as table tennis is downright offensive to the athletes that have dedicated their lives to perfecting the art. Furthermore, usage of the sport as some inane way to check presence in computer networks and programs would imply that anyone can return a serve as long as they're present, which further degredates the athletes that work day and night to compete for championship tournaments throughout the world.\n\nIn response to your *serve*, I hit back a full force spinball corner return. Don't even try to hit it back.").await?;
 
     Ok(())
@@ -388,6 +405,7 @@ async fn ping(ctx: &Context, msg: &Message) -> CommandResult {
 #[command]
 #[num_args(2)]
 async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
+    trace!("fabricate");
     use diesel::prelude::*;
     use schema::item_types::dsl as it;
     use schema::item_type_aliases::dsl as ita;
@@ -454,6 +472,7 @@ async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResul
 #[command]
 #[aliases("?","h")]
 async fn help(ctx: &Context, msg: &Message) -> CommandResult {
+    trace!("help");
     msg.reply(&ctx, "For help see https://github.com/consortium-chat/plutocradroid/blob/master/README.md#commands").await?;
     Ok(())
 }
@@ -461,6 +480,7 @@ async fn help(ctx: &Context, msg: &Message) -> CommandResult {
 #[command]
 #[aliases("v","info","version")]
 async fn version_info(ctx: &Context, msg: &Message) -> CommandResult {
+    trace!("version_info");
     msg.reply(&ctx, format!(
         "Plutocradroid {} commit {} built for {} at {}.\nhttps://github.com/consortium-chat/plutocradroid",
         env!("VERGEN_GIT_SEMVER"),
@@ -474,6 +494,7 @@ async fn version_info(ctx: &Context, msg: &Message) -> CommandResult {
 #[command]
 #[aliases("b","bal","balance","i","inv","inventory")]
 async fn balances(ctx: &Context, msg: &Message) -> CommandResult {
+    trace!("balances");
     use diesel::prelude::*;
     use view_schema::balance_history::dsl as bh;
     use schema::item_types::dsl as it;
@@ -539,6 +560,7 @@ async fn force_give(ctx:&Context, msg:&Message, args:Args) -> CommandResult {
 }
 
 async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool) -> CommandResult {
+    trace!("give_common");
     use diesel::prelude::*;
     use schema::item_types::dsl as it;
     use schema::item_type_aliases::dsl as ita;
@@ -701,6 +723,7 @@ async fn supermotion(ctx:&Context, msg:&Message, args:Args) -> CommandResult {
 }
 
 async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) -> CommandResult {
+    trace!("motion_common");
     use diesel::prelude::*;
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
@@ -872,6 +895,7 @@ const IGNORE_WORDS:&[&str] = &["in", "i", "I", "think", "say", "fuck", "hell"];
 #[command]
 #[min_args(1)]
 async fn vote(ctx:&Context, msg:&Message, mut args:Args) -> CommandResult {
+    trace!("vote");
     let checksummed_motion_id:String = args.single()?;
     //dbg!(&checksummed_motion_id);
     if let Some(digit_arr) = damm::validate(&checksummed_motion_id) {
@@ -933,6 +957,7 @@ pub async fn vote_common_async(
     message_id:Option<i64>,
     command_message_id:Option<i64>,
 ) -> Cow<'static, str> {
+    trace!("vote_common_async");
     task::spawn_blocking(move || {
         let conn = pool.get().unwrap();
         vote_common(
@@ -958,6 +983,7 @@ pub fn vote_common(
     message_id:Option<i64>,
     command_message_id:Option<i64>,
 ) -> Cow<'static, str> {
+    trace!("vote_common");
     let mut fail:Option<&'static str> = None;
     let mut outer_cost:Option<i64> = None;
     let mut outer_motion_id:Option<i64> = None;
