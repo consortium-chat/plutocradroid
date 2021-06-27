@@ -19,6 +19,7 @@ mod web2;
 mod is_win;
 mod static_responders;
 mod tasks;
+mod raii_transaction;
 
 use std::{env,panic,process};
 
@@ -35,7 +36,8 @@ fn main() {
 
     env_logger::init();
     if env::var_os("RUN_BOT") == Some("1".into()) {
-        bot::bot_main();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(bot::bot_main());
     } else if env::var_os("RUN_WEB2") == Some("1".into()) {
         web2::main();
     } else {

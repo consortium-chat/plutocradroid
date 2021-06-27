@@ -1,7 +1,6 @@
 use rocket::request::Request;
 use rocket::response::{Responder, Response};
 use rocket::http::Status;
-use hyper::header::Header;
 use rocket::http::hyper::header::{
     Expires,
     HttpDate, 
@@ -11,6 +10,7 @@ use rocket::http::hyper::header::{
     CacheDirective,
     IfNoneMatch,
 };
+use hyper::header::Header;
 use time::{self, Duration};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,7 +36,7 @@ pub struct Tagged<R>(pub String, pub R);
 impl<'r, R: Responder<'r>> Responder<'r> for Tagged<R> {
     fn respond_to(self, req: &Request) -> Result<Response<'r>, Status> {
         let tag = EntityTag::new(false, self.0);
-        if let Some(Ok(header)) = req.headers().get_one("if-none-match").map(|h| <IfNoneMatch as Header>::parse_header(&[h.as_bytes().into()])){
+        if let Some(Ok(header)) = req.headers().get_one("if-none-match").map(|h| IfNoneMatch::parse_header(&[h.as_bytes().into()])){
             let is_match = match header {
                 IfNoneMatch::Any => true,
                 IfNoneMatch::Items(items) => items.iter().any(|i| i.strong_eq(&tag)),

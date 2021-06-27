@@ -1,18 +1,24 @@
 use std::sync::Arc;
 use serenity::framework::standard::CommandResult;
+use serenity::http::CacheHttp;
+use serenity::framework::standard::CommandError;
 use crate::damm;
 use crate::schema;
 use crate::view_schema;
 use crate::bot;
+use crate::bot::DbPool;
 use crate::is_win::is_win;
 
-pub fn process_generators(conn: &diesel::pg::PgConnection) -> Result<(),diesel::result::Error> {
+pub async fn process_generators(
+    pool: Arc<DbPool>
+) -> Result<(),CommandError> {
     // use schema::gen::dsl as gdsl;
     use schema::transfers::dsl as tdsl;
     use diesel::prelude::*;
     use view_schema::balance_history::dsl as bhdsl;
     use schema::single::dsl as sdsl;
     let now = chrono::Utc::now();
+    let conn = pool.get()?;
     let last_gen:chrono::DateTime<chrono::Utc> = sdsl::single.select(sdsl::last_gen).get_result(&*conn)?;
 
     if now - last_gen < *bot::GENERATE_EVERY {
@@ -62,16 +68,20 @@ pub fn process_generators(conn: &diesel::pg::PgConnection) -> Result<(),diesel::
     Ok(())
 }
 
-pub fn process_motion_completions(conn: &diesel::pg::PgConnection, cnh: Arc<serenity::CacheAndHttp>) -> CommandResult {
+pub async fn process_motion_completions(
+    pool: Arc<DbPool>,
+    cnh: &impl CacheHttp,
+) -> CommandResult {
     use diesel::prelude::*;
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
     let now = chrono::Utc::now();
+    let conn = pool.get()?;
     let motions:Vec<(String, i64, bool)> = mdsl::motions
         .filter(mdsl::announcement_message_id.is_null())
         .filter(mdsl::last_result_change.lt(now - *bot::MOTION_EXPIRATION))
         .select((mdsl::motion_text, mdsl::rowid, mdsl::is_super))
-        .get_results(&*conn)?;
+        .get_results(&conn)?;
     for (motion_text, motion_id, is_super) in &motions {
         #[derive(Queryable,Debug)]
         struct MotionVote {
@@ -82,7 +92,7 @@ pub fn process_motion_completions(conn: &diesel::pg::PgConnection, cnh: Arc<sere
         let votes:Vec<MotionVote> = mvdsl::motion_votes
             .filter(mvdsl::motion.eq(motion_id))
             .select((mvdsl::user, mvdsl::amount, mvdsl::direction))
-            .get_results(&*conn)?;
+            .get_results(&conn)?;
         let mut yes_votes = 0;
         let mut no_votes = 0;
         for vote in &votes {
@@ -94,7 +104,7 @@ pub fn process_motion_completions(conn: &diesel::pg::PgConnection, cnh: Arc<sere
         }
         let pass = is_win(yes_votes, no_votes, *is_super);
         let pass_msg = if pass { "PASSED" } else { "FAILED" }; 
-        let announce_msg = serenity::model::id::ChannelId::from(bot::MOTIONS_CHANNEL).send_message(&cnh.http, |m| {
+        let announce_msg = serenity::model::id::ChannelId::from(bot::MOTIONS_CHANNEL).send_message(cnh.http(), |m| {
             m.embed(|e| {
                 e.title(
                     format!(
@@ -112,11 +122,11 @@ pub fn process_motion_completions(conn: &diesel::pg::PgConnection, cnh: Arc<sere
                 }
                 e
             })
-        })?;
+        }).await?;
 
         diesel::update(mdsl::motions.filter(mdsl::rowid.eq(motion_id))).set(
             mdsl::announcement_message_id.eq(announce_msg.id.0 as i64)
-        ).execute(&*conn)?;
+        ).execute(&conn)?;
     }
 
     let mmids:Vec<i64> = mdsl::motions
@@ -125,8 +135,8 @@ pub fn process_motion_completions(conn: &diesel::pg::PgConnection, cnh: Arc<sere
         .select(mdsl::bot_message_id)
         .get_results(&*conn)?;
     for mmid in &mmids {
-        let mut motion_message = cnh.http.get_message(bot::MOTIONS_CHANNEL, *mmid as u64)?;
-        bot::update_motion_message(Arc::clone(&cnh.http), &*conn, &mut motion_message)?;
+        let mut motion_message = cnh.http().get_message(bot::MOTIONS_CHANNEL, *mmid as u64).await?;
+        bot::update_motion_message(cnh, Arc::clone(&pool), &mut motion_message).await?;
     }
     Ok(())
 }

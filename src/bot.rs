@@ -3,19 +3,22 @@ use crate::view_schema;
 use crate::damm;
 
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 use serenity::client::Client;
 use serenity::model::misc::Mentionable;
 use serenity::model::channel::Message;
 use serenity::model::id::UserId;
 use serenity::prelude::{EventHandler, Context};
+use serenity::http::CacheHttp;
 use serenity::framework::standard::{
     StandardFramework,
     CommandResult,
+    CommandError,
+    DispatchError,
     macros::{
         command,
-        group
+        group,
+        hook
     },
     Args,
 };
@@ -23,14 +26,21 @@ use regex::Regex;
 
 use diesel::connection::Connection;
 
+use tokio::task;
+
+use async_trait::async_trait;
+
+use crate::raii_transaction::{ConnectionExt, RaiiTransaction};
 use crate::is_win::is_win;
 use crate::tasks;
 
 const RUB_IT_IN:bool = false;
 
+pub type DbPool = diesel::r2d2::Pool<diesel::r2d2::ConnectionManager<diesel::PgConnection>>;
+
 struct DbPoolKey;
 impl serenity::prelude::TypeMapKey for DbPoolKey {
-    type Value = Arc<diesel::r2d2::Pool<diesel::r2d2::ConnectionManager<diesel::PgConnection>>>;
+    type Value = Arc<DbPool>;
 }
 
 #[group]
@@ -89,12 +99,21 @@ pub const MOTIONS_CHANNEL:u64 = 609093491150028800; //bureaucracy channel
 //const MOTIONS_CHANNEL:u64 = 560918427091468387; //spam channel
 pub const MOTIONS_CHANNEL:u64 = 770726979456466954; //pluto-beta-messages in CONceptualization
 
+#[cfg(not(feature = "debug"))]
+pub const MY_ID_INT:u64 = 690112509537288202;
+#[cfg(feature = "debug")]
+pub const MY_ID_INT:u64 = 698996983305863178;
+
+pub const MY_ID:UserId = UserId(MY_ID_INT);
+
+#[async_trait]
 trait FromCommandArgs : Sized {
-    fn from_command_args(ctx: &Context, msg: &Message, arg: &str) -> Result<Self, &'static str>;
+    async fn from_command_args(ctx: &Context, msg: &Message, arg: &str) -> Result<Self, &'static str>;
 }
 
+#[async_trait]
 impl FromCommandArgs for UserId {
-    fn from_command_args(ctx: &Context, msg: &Message, arg: &str) -> Result<Self, &'static str> {
+    async fn from_command_args(ctx: &Context, msg: &Message, arg: &str) -> Result<Self, &'static str> {
         if arg == "." || arg == "self" {
             return Ok(msg.author.id);
         }
@@ -113,32 +132,30 @@ impl FromCommandArgs for UserId {
             if let Ok(discriminator) = pieces[0].parse():Result<u16, _> {
                 if discriminator <= 9999 {
                     let name = pieces[1];
-                    let cache = ctx.cache.read();
-                    let maybe_user = cache
-                        .users
+                    let users = ctx.cache.users().await;
+                    let maybe_user = users
                         .values()
-                        .find(|user_lock| {
-                            let user = user_lock.read();
+                        .find(|user| {
                             user.discriminator == discriminator && user.name.to_ascii_uppercase() == name.to_ascii_uppercase()
                         });
-                    if let Some(user_lock) = maybe_user {
-                        return Ok(user_lock.read().id);
+                    if let Some(user) = maybe_user {
+                        return Ok(user.id);
                     }
                 }
             }
         }
 
-        for guild_lock in ctx.cache.read().guilds.values() {
-            let guild = guild_lock.read();
-            for member in guild.members.values() {
-                if let Some(nick) = member.nick.as_ref() {
-                    if nick.to_ascii_uppercase() == arg.to_ascii_uppercase() {
-                        return Ok(member.user.read().id);
+        for guild_id in ctx.cache.guilds().await {
+            if let Some(members) = ctx.cache.guild_field(guild_id, |g| g.members.clone()).await {
+                for (userid, member) in members {
+                    if let Some(nick) = member.nick.as_ref() {
+                        if nick.to_ascii_uppercase() == arg.to_ascii_uppercase() {
+                            return Ok(userid);
+                        }
                     }
-                }
-                let user = member.user.read();
-                if user.name.to_ascii_uppercase() == arg.to_ascii_uppercase() {
-                    return Ok(user.id);
+                    if member.user.name.to_ascii_uppercase() == arg.to_ascii_uppercase() {
+                        return Ok(userid);
+                    }
                 }
             }
         }
@@ -146,32 +163,35 @@ impl FromCommandArgs for UserId {
     }
 }
 
+#[serenity::async_trait]
 impl EventHandler for Handler {
-    fn reaction_add(&self, ctx: Context, r: serenity::model::channel::Reaction) {
+    async fn reaction_add(&self, ctx: Context, r: serenity::model::channel::Reaction) {
         let mut vote_count = 0;
         let mut vote_direction = None;
-        let user_id = r.user_id;
-        if user_id == ctx.cache.read().user.id {
-            return;
-        }
-        let message_id = r.message_id;
-        if let serenity::model::channel::ReactionType::Custom{animated: _, id, name: _} = r.emoji {
-            if let Some(action) = SPECIAL_EMOJI.get(&id.0) {
-                match action {
-                    SpecialEmojiAction::Direction(dir) => vote_direction = Some(*dir),
-                    SpecialEmojiAction::Amount(a) => vote_count = *a,
+        let maybe_user_id = r.user_id;
+        if let Some(user_id) = maybe_user_id {
+            if user_id == ctx.cache.current_user_id().await {
+                return;
+            }
+            let message_id = r.message_id;
+            if let serenity::model::channel::ReactionType::Custom{animated: _, id, name: _} = r.emoji {
+                if let Some(action) = SPECIAL_EMOJI.get(&id.0) {
+                    match action {
+                        SpecialEmojiAction::Direction(dir) => vote_direction = Some(*dir),
+                        SpecialEmojiAction::Amount(a) => vote_count = *a,
+                    }
+                    let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get().unwrap();
+                    let resp = vote_common(
+                        &*conn,
+                        vote_direction,
+                        vote_count as i64,
+                        user_id.0 as i64,//user_id,
+                        None, //motion_id:Option<i64>,
+                        Some(message_id.0 as i64), //message_id:Option<i64>,
+                        None, //command_message_id:Option<i64>,
+                    );
+                    user_id.create_dm_channel(&ctx).await.unwrap().say(&ctx, resp).await.unwrap();
                 }
-                let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get().unwrap();
-                let resp = vote_common(
-                    &*conn,
-                    vote_direction,
-                    vote_count as i64,
-                    user_id.0 as i64,//user_id,
-                    None, //motion_id:Option<i64>,
-                    Some(message_id.0 as i64), //message_id:Option<i64>,
-                    None, //command_message_id:Option<i64>,
-                );
-                user_id.create_dm_channel(&ctx).unwrap().say(&ctx, resp).unwrap();
             }
         }
     }
@@ -195,7 +215,24 @@ fn nth_vote_cost(n:i64) -> Result<i64,()> {
     }
 }
 
-pub fn bot_main() {
+#[hook]
+async fn on_dispatch_error_hook(_context: &Context, msg: &Message, error: DispatchError){
+    println!(
+        "{:?}\nerr'd with {:?}",
+        msg, error
+    );
+}
+
+
+#[hook]
+async fn after_hook(_: &Context, _: &Message, cmd_name: &str, error: Result<(), CommandError>) {
+    //  Print out an error if it happened
+    if let Err(why) = error {
+        println!("Error in {}: {:?}", cmd_name, why);
+    }
+}
+
+pub async fn bot_main() {
     lazy_static::initialize(&GENERATE_EVERY);
     lazy_static::initialize(&USER_PING_RE);
     lazy_static::initialize(&MOTION_EXPIRATION);
@@ -219,60 +256,50 @@ pub fn bot_main() {
             )).execute(&*conn).unwrap();
         }
     }
-
-    // Login with a bot token from the environment
-    let mut client = Client::new(&env::var("DISCORD_TOKEN").expect("token"), Handler)
-        .expect("Error creating client");
-    let mut write_handle = client.data.write();
-    write_handle.insert::<DbPoolKey>(Arc::clone(&arc_pool));
-    drop(write_handle);
+    
     #[cfg(feature = "debug")]
     let prefix = "&";
     #[cfg(not(feature = "debug"))]
     let prefix = "$";
-    let current_user = client.cache_and_http.http.get_current_user().expect("I don't know who I am!");
     let mut framework = StandardFramework::new()
     .configure(|c| {
-        c.prefix(prefix).allow_dm(true).on_mention(Some(current_user.id))
+        c.prefix(prefix).allow_dm(true).on_mention(Some(MY_ID))
     })
-    .on_dispatch_error(|_ctx, msg, err| {
-        println!(
-            "{:?}\nerr'd with {:?}",
-            msg, err
-        );
-    })
-    .after(|ctx, msg, _command_name, res| {
-        if let Err(e) = res {
-            msg.reply(ctx, format!("ERR: {:?}", e)).unwrap();
-        }
-    });
+    .on_dispatch_error(on_dispatch_error_hook)
+    .after(after_hook);
     framework = framework.group(&GENERAL_GROUP);
     #[cfg(feature = "debug")]
     { framework = framework.group(&GENERAL_GROUP).group(&DEBUG_GROUP); }
-    client.with_framework(framework);
 
+
+    // Login with a bot token from the environment
+    let mut client = Client::builder(&env::var("DISCORD_TOKEN").expect("token"))
+        .event_handler(Handler)
+        .framework(framework)
+        .await
+        .expect("Error creating client");
+    let mut write_handle = client.data.write().await;
+    write_handle.insert::<DbPoolKey>(Arc::clone(&arc_pool));
+    drop(write_handle);
     let cnh = Arc::clone(&client.cache_and_http);
-    let announce_threads_conn = arc_pool.get().unwrap();
-    thread::spawn(move || {
-        let conn = announce_threads_conn;
-        
+    let announce_threads_pool = Arc::clone(&arc_pool);
+    let announce_threads_http = Arc::clone(&cnh);
+    task::spawn(async move {
         loop {
             std::thread::sleep(Duration::from_millis(500));           
-            match tasks::process_motion_completions(&conn, Arc::clone(&cnh)) {
+            match tasks::process_motion_completions(Arc::clone(&announce_threads_pool), &announce_threads_http).await {
                 Ok(()) => (),
                 Err(e) => warn!("Could not query for completed motions, {:?}", e),
             }
         }
     });
 
-    let threads_conn = arc_pool.get().unwrap();
-    thread::spawn(move || {
-        let conn = threads_conn;
-
+    let threads_pool = Arc::clone(&arc_pool);
+    task::spawn(async move {
         loop {
             /* not properly locking, but should only have one thread trying to access */
             std::thread::sleep(Duration::from_millis(500));
-            match tasks::process_generators(&*conn) {
+            match tasks::process_generators(Arc::clone(&threads_pool)).await {
                 Ok(()) => (),
                 Err(e) => warn!("Could process generator payouts, {:?}", e),
             }
@@ -287,28 +314,30 @@ pub fn bot_main() {
     println!("Debug mode.");
 
     // start listening for events by starting a single shard
-    if let Err(why) = client.start() {
+    if let Err(why) = client.start().await {
         println!("An error occurred while running the client: {:?}", why);
     }
 }
 
-pub fn update_motion_message(
-    ctx: impl serenity::http::CacheHttp,
-    conn: &diesel::pg::PgConnection,
+pub async fn update_motion_message(
+    cnh: impl CacheHttp,
+    pool: Arc<DbPool>,
     msg: &mut serenity::model::channel::Message
 ) -> CommandResult {
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
     use diesel::prelude::*;
+
+    let conn = pool.get()?;
     
-    let (motion_text, motion_id, is_super) = mdsl::motions.filter(mdsl::bot_message_id.eq(msg.id.0 as i64)).select((mdsl::motion_text, mdsl::rowid, mdsl::is_super)).get_result(conn)?:(String, i64, bool);
+    let (motion_text, motion_id, is_super) = mdsl::motions.filter(mdsl::bot_message_id.eq(msg.id.0 as i64)).select((mdsl::motion_text, mdsl::rowid, mdsl::is_super)).get_result(&conn)?:(String, i64, bool);
     #[derive(Queryable,Debug)]
     struct MotionVote {
         user:i64,
         amount:i64,
         direction:bool,
     }
-    let mut votes:Vec<MotionVote> = mvdsl::motion_votes.filter(mvdsl::motion.eq(motion_id)).select((mvdsl::user, mvdsl::amount, mvdsl::direction)).get_results(conn)?;
+    let mut votes:Vec<MotionVote> = mvdsl::motion_votes.filter(mvdsl::motion.eq(motion_id)).select((mvdsl::user, mvdsl::amount, mvdsl::direction)).get_results(&conn)?;
     let mut yes_votes = 0;
     let mut no_votes = 0;
     for vote in &votes {
@@ -321,7 +350,7 @@ pub fn update_motion_message(
     votes.sort_unstable_by_key(|v| -v.amount);
     let pass = is_win(yes_votes, no_votes, is_super);
     let cap_label = if is_super { "Supermotion" } else { "Simple Motion" };
-    msg.edit(ctx, |m| {
+    msg.edit(cnh, |m| {
         m.embed(|e| {
             e.field(cap_label, motion_text, false);
             if pass {
@@ -338,35 +367,34 @@ pub fn update_motion_message(
             }
             e
         })
-    }).unwrap();
+    }).await?;
     let target = mdsl::motions.filter(mdsl::bot_message_id.eq(msg.id.0 as i64));
-    diesel::update(target).set(mdsl::needs_update.eq(false)).execute(conn).unwrap();
+    diesel::update(target).set(mdsl::needs_update.eq(false)).execute(&conn).unwrap();
     Ok(())
 }
 
 #[command]
 #[num_args(1)]
-fn hack_message_update(ctx: &mut Context, _msg: &Message, mut args: Args) -> CommandResult {
+async fn hack_message_update(ctx: &Context, _msg: &Message, mut args: Args) -> CommandResult {
     let motion_message_id:u64 = args.single()?;
-    let mut motion_message = ctx.http.get_message(MOTIONS_CHANNEL, motion_message_id)?;
-    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
-    update_motion_message(ctx, &*conn, &mut motion_message) 
+    let mut motion_message = ctx.http.get_message(MOTIONS_CHANNEL, motion_message_id).await?;
+    update_motion_message(ctx, Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap()), &mut motion_message).await
 }
 
 #[command]
-fn ping(ctx: &mut Context, msg: &Message) -> CommandResult {
-    msg.reply(ctx, "The use of such childish terminology to describe a professional sport played in the olympics such as table tennis is downright offensive to the athletes that have dedicated their lives to perfecting the art. Furthermore, usage of the sport as some inane way to check presence in computer networks and programs would imply that anyone can return a serve as long as they're present, which further degredates the athletes that work day and night to compete for championship tournaments throughout the world.\n\nIn response to your *serve*, I hit back a full force spinball corner return. Don't even try to hit it back.")?;
+async fn ping(ctx: &Context, msg: &Message) -> CommandResult {
+    msg.reply(ctx, "The use of such childish terminology to describe a professional sport played in the olympics such as table tennis is downright offensive to the athletes that have dedicated their lives to perfecting the art. Furthermore, usage of the sport as some inane way to check presence in computer networks and programs would imply that anyone can return a serve as long as they're present, which further degredates the athletes that work day and night to compete for championship tournaments throughout the world.\n\nIn response to your *serve*, I hit back a full force spinball corner return. Don't even try to hit it back.").await?;
 
     Ok(())
 }
 
 #[command]
 #[num_args(2)]
-fn fabricate(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult {
+async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     use diesel::prelude::*;
     use schema::item_types::dsl as it;
     use schema::item_type_aliases::dsl as ita;
-    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
+    let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
 
     let ty:ItemType;
     let ty_str:String = args.single()?;
@@ -388,12 +416,12 @@ fn fabricate(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult 
     let user:UserId;
     if args.remaining() > 0 {
         let user_str = args.single()?:String;
-        user = UserId::from_command_args(ctx, msg, &user_str)?;
+        user = UserId::from_command_args(ctx, msg, &user_str).await?;
     }else{
         user = msg.author.id;
     }
 
-    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
+    let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
     conn.transaction::<_, diesel::result::Error, _>(|| {
         use view_schema::balance_history::dsl as bh;
         use schema::transfers::dsl as tdsl;
@@ -421,85 +449,73 @@ fn fabricate(ctx: &mut Context, msg: &Message, mut args: Args) -> CommandResult 
         Ok(())
     })?;
 
-    msg.reply(&ctx, "Fabricated.")?;
+    msg.reply(&ctx, "Fabricated.").await?;
 
     Ok(())
 }
 
 #[command]
 #[aliases("?","h")]
-fn help(ctx: &mut Context, msg: &Message) -> CommandResult {
-    msg.reply(&ctx, "For help see https://github.com/consortium-chat/plutocradroid/blob/master/README.md#commands")?;
+async fn help(ctx: &Context, msg: &Message) -> CommandResult {
+    msg.reply(&ctx, "For help see https://github.com/consortium-chat/plutocradroid/blob/master/README.md#commands").await?;
     Ok(())
 }
 
 #[command]
 #[aliases("v","info","version")]
-fn version_info(ctx: &mut Context, msg: &Message) -> CommandResult {
+async fn version_info(ctx: &Context, msg: &Message) -> CommandResult {
     msg.reply(&ctx, format!(
         "Plutocradroid {} commit {} built for {} at {}.\nhttps://github.com/consortium-chat/plutocradroid",
-        env!("VERGEN_SEMVER_LIGHTWEIGHT"),
-        env!("VERGEN_SHA_SHORT"),
-        env!("VERGEN_TARGET_TRIPLE"),
+        env!("VERGEN_GIT_SEMVER"),
+        env!("VERGEN_GIT_SHA"),
+        env!("VERGEN_CARGO_TARGET_TRIPLE"),
         env!("VERGEN_BUILD_TIMESTAMP"),
-    ))?;
+    )).await?;
     Ok(())
 }
 
 #[command]
 #[aliases("b","bal","balance","i","inv","inventory")]
-fn balances(ctx: &mut Context, msg: &Message) -> CommandResult {
+async fn balances(ctx: &Context, msg: &Message) -> CommandResult {
     use diesel::prelude::*;
     use view_schema::balance_history::dsl as bh;
     use schema::item_types::dsl as it;
-    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
     
 
-    let get_bal = |ty_str:&str| {
-        bh::balance_history
+    let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
+    let item_types:Vec<ItemType> = it::item_types
+        .get_results(&*conn)?;
+    
+    let mut balances = Vec::new();
+    for it in item_types {
+        let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
+        let bal = bh::balance_history
         .select(bh::balance)
         .filter(bh::user.eq(msg.author.id.0 as i64))
-        .filter(bh::ty.eq(ty_str))
+        .filter(bh::ty.eq(it.db_name()))
         .order(bh::happened_at.desc())
         .limit(1)
         .get_result(&*conn)
         .optional()
-        .map(|opt| opt.unwrap_or(0i64)):Result<i64,_>
+        .map(|opt| opt.unwrap_or(0i64))?:i64;
+        drop(conn);
+
+        balances.push((it, bal));
     };
-    let item_types:Vec<ItemType> = it::item_types
-        .get_results(&*conn)?;
-    let balances = (item_types.into_iter().map(|ty| get_bal(ty.db_name()).map(|bal| (ty,bal))).collect():Result<Vec<_>,_>)?;
-    // let gen_count = get_bal("gen")?;
-    // let pc_count = get_bal("pc")?;
+    drop(conn);
     msg.channel_id.send_message(&ctx, |cm| {
         cm.embed(|e| {
             e.title("Your balances:");
-            // e.field("Generators", gen_count, false);
-            // e.field("Capital", pc_count, false);
             for (item_type, amount) in &balances {
                 e.field(&item_type.long_name_plural, amount, false);
             }
             e
         });
         cm
-    })?;
+    }).await?;
     Ok(())
 }
 
-// #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-// enum ItemType {
-//     PoliticalCapital,
-//     Generator,
-// }
-
-// impl ItemType {
-//     pub fn db_name(&self) -> &'static str {
-//         match *self {
-//             ItemType::PoliticalCapital => "pc",
-//             ItemType::Generator => "gen",
-//         }
-//     }
-// }
 #[derive(Debug, PartialEq, Eq, Clone, Queryable)]
 struct ItemType{
     pub name: String,
@@ -516,26 +532,26 @@ impl ItemType {
 #[command]
 #[min_args(2)]
 #[max_args(3)]
-fn give(ctx:&mut Context, msg:&Message, args:Args) -> CommandResult {
-    give_common(ctx, msg, args, true)
+async fn give(ctx:&Context, msg:&Message, args:Args) -> CommandResult {
+    give_common(ctx, msg, args, true).await
 }
 
 #[command]
 #[min_args(2)]
 #[max_args(3)]
-fn force_give(ctx:&mut Context, msg:&Message, args:Args) -> CommandResult {
-    give_common(ctx, msg, args, false)
+async fn force_give(ctx:&Context, msg:&Message, args:Args) -> CommandResult {
+    give_common(ctx, msg, args, false).await
 }
 
-fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -> CommandResult {
+async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool) -> CommandResult {
     use diesel::prelude::*;
     use schema::item_types::dsl as it;
     use schema::item_type_aliases::dsl as ita;
-    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
+    let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
 
     let user_str:String = args.single()?;
-    let user = UserId::from_command_args( ctx, msg, &user_str )?;
-    if check_user && !ctx.cache.read().users.contains_key(&user) {
+    let user = UserId::from_command_args( ctx, msg, &user_str ).await?;
+    if check_user && !ctx.cache.users().await.contains_key(&user) {
         return Err("User not found".into());
     }
     let mut maybe_ty:Option<ItemType> = None;
@@ -659,14 +675,14 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
             Ok(())
         })?;
         if let Some(fail_msg) = fail {
-            msg.reply(&ctx, fail_msg)?;
+            msg.reply(&ctx, fail_msg).await?;
         }else{
             msg.reply(&ctx, format!(
                 "Successfully transferred {} {} to {}.",
                 amount,
                 &ty.long_name_ambiguous,
                 user.mention()
-            ))?;
+            )).await?;
         }
     } else if amount.is_none() {
         return Err("Amount not provided.".into());
@@ -680,7 +696,7 @@ fn give_common(ctx:&mut Context, msg:&Message, mut args:Args, check_user:bool) -
 #[cfg(feature = "debug")]
 #[command]
 #[aliases("history_csv")]
-fn transaction_history_csv(ctx:&mut Context, msg:&Message, _args:Args) -> CommandResult {
+async fn transaction_history_csv(ctx:&Context, msg:&Message, _args:Args) -> CommandResult {
     use diesel::prelude::*;
     use view_schema::balance_history::dsl as bhdsl;
     #[derive(Debug,Queryable)]
@@ -702,7 +718,7 @@ fn transaction_history_csv(ctx:&mut Context, msg:&Message, _args:Args) -> Comman
         pub balance_after:String,
         pub comment:String,
     }
-    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
+    let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
     let history:Vec<DbTransaction> = bhdsl::balance_history.select((
         bhdsl::balance,
         bhdsl::quantity,
@@ -747,116 +763,112 @@ fn transaction_history_csv(ctx:&mut Context, msg:&Message, _args:Args) -> Comman
 }
 
 #[command]
-fn motion(ctx:&mut Context, msg:&Message, args:Args) -> CommandResult {
-    motion_common(ctx, msg, args, false)
+async fn motion(ctx:&Context, msg:&Message, args:Args) -> CommandResult {
+    motion_common(ctx, msg, args, false).await
 }
 
 #[command]
-fn supermotion(ctx:&mut Context, msg:&Message, args:Args) -> CommandResult {
-    motion_common(ctx, msg, args, true)
+async fn supermotion(ctx:&Context, msg:&Message, args:Args) -> CommandResult {
+    motion_common(ctx, msg, args, true).await
 }
 
-fn motion_common(ctx:&mut Context, msg:&Message, args:Args, is_super: bool) -> CommandResult {
+async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) -> CommandResult {
     use diesel::prelude::*;
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
     use schema::transfers::dsl as tdsl;
     use view_schema::balance_history::dsl as bhdsl;
     let motion_text = args.rest();
-    let mut motion_message_outer:Option<_> = None;
-    let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
+    //let mut motion_message_outer:Option<_> = None;
+    let mut conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
 
     let now = chrono::Utc::now();
-    conn.transaction::<_, diesel::result::Error, _>(|| {
-        let balance:i64 = bhdsl::balance_history
-            .select(bhdsl::balance)
-            .filter(bhdsl::ty.eq("pc"))
-            .filter(bhdsl::user.eq(msg.author.id.0 as i64))
-            .order(bhdsl::happened_at.desc())
-            .limit(1)
-            .for_update()
-            .get_result(&*conn)?;
-        
-        if balance < VOTE_BASE_COST as i64 {
-            msg.reply(&ctx, "You don't have enough capital.").unwrap();
-            return Err(diesel::result::Error::RollbackTransaction);
-        }
+    let txn = conn.raii_transaction()?;
+    let balance:i64 = bhdsl::balance_history
+        .select(bhdsl::balance)
+        .filter(bhdsl::ty.eq("pc"))
+        .filter(bhdsl::user.eq(msg.author.id.0 as i64))
+        .order(bhdsl::happened_at.desc())
+        .limit(1)
+        .for_update()
+        .get_result(&*txn)?;
+    
+    if balance < VOTE_BASE_COST as i64 {
+        msg.reply(&ctx, "You don't have enough capital.").await?;
+        RaiiTransaction::rollback(txn)?;
+        return Ok(());
+    }
 
-        let motion_id:i64 = diesel::insert_into(schema::motion_ids::table).default_values().returning(schema::motion_ids::dsl::rowid).get_result(&*conn)?;
+    let motion_id:i64 = diesel::insert_into(schema::motion_ids::table).default_values().returning(schema::motion_ids::dsl::rowid).get_result(&*txn)?;
 
-        let cap_label = if is_super { "Supermotion" } else { "Simple Motion" };
-        let bot_msg = serenity::model::id::ChannelId(MOTIONS_CHANNEL).send_message(&ctx, |m| {
-            m.content(format!(
-                "A motion has been called by {}\n`$vote {}` to vote!{}",
-                msg.author.mention(),
-                damm::add_to_str(motion_id.to_string()),
-                if is_super && RUB_IT_IN { " <!@155438323354042368> this is a SUPER motion, no complaining." } else { "" }
-            )).embed(|e| {
-                e.field(cap_label, motion_text, false)
-                .field("Votes", "**for 1**/0 against", false)
-                .field(name_of(msg.author.id), "1 for", true)
-            })
-        }).unwrap();
+    let cap_label = if is_super { "Supermotion" } else { "Simple Motion" };
+    let bot_msg = serenity::model::id::ChannelId(MOTIONS_CHANNEL).send_message(&ctx, |m| {
+        m.content(format!(
+            "A motion has been called by {}\n`$vote {}` to vote!{}",
+            msg.author.mention(),
+            damm::add_to_str(motion_id.to_string()),
+            if is_super && RUB_IT_IN { " <!@155438323354042368> this is a SUPER motion, no complaining." } else { "" }
+        )).embed(|e| {
+            e.field(cap_label, motion_text, false)
+            .field("Votes", "**for 1**/0 against", false)
+            .field(name_of(msg.author.id), "1 for", true)
+        })
+    }).await?;
 
-        motion_message_outer = Some(bot_msg.clone());
+    let mut motion_message = bot_msg.clone();
 
-        let motion_id:i64 = diesel::insert_into(mdsl::motions).values((
-            mdsl::rowid.eq(motion_id),
-            mdsl::command_message_id.eq(msg.id.0 as i64),
-            mdsl::bot_message_id.eq(bot_msg.id.0 as i64),
-            mdsl::motion_text.eq(motion_text),
-            mdsl::motioned_at.eq(now),
-            mdsl::last_result_change.eq(now),
-            mdsl::is_super.eq(is_super),
-            mdsl::motioned_by.eq(msg.author.id.0 as i64),
-        )).returning(mdsl::rowid).get_result(&*conn)?;
+    let motion_id:i64 = diesel::insert_into(mdsl::motions).values((
+        mdsl::rowid.eq(motion_id),
+        mdsl::command_message_id.eq(msg.id.0 as i64),
+        mdsl::bot_message_id.eq(bot_msg.id.0 as i64),
+        mdsl::motion_text.eq(motion_text),
+        mdsl::motioned_at.eq(now),
+        mdsl::last_result_change.eq(now),
+        mdsl::is_super.eq(is_super),
+        mdsl::motioned_by.eq(msg.author.id.0 as i64),
+    )).returning(mdsl::rowid).get_result(&*txn)?;
 
-        diesel::insert_into(mvdsl::motion_votes).values((
-            mvdsl::user.eq(msg.author.id.0 as i64),
-            mvdsl::motion.eq(motion_id),
-            mvdsl::direction.eq(true),
-            mvdsl::amount.eq(1)
-        )).execute(&*conn)?;
+    diesel::insert_into(mvdsl::motion_votes).values((
+        mvdsl::user.eq(msg.author.id.0 as i64),
+        mvdsl::motion.eq(motion_id),
+        mvdsl::direction.eq(true),
+        mvdsl::amount.eq(1)
+    )).execute(&*txn)?;
 
-        diesel::insert_into(tdsl::transfers).values((
-            tdsl::from_user.eq(msg.author.id.0 as i64),
-            tdsl::from_balance.eq(balance),
-            tdsl::ty.eq("pc"),
-            tdsl::quantity.eq(VOTE_BASE_COST as i64),
-            tdsl::happened_at.eq(chrono::Utc::now()),
-            tdsl::message_id.eq(msg.id.0 as i64),
-            tdsl::to_motion.eq(motion_id),
-            tdsl::to_votes.eq(1),
-            tdsl::transfer_ty.eq("motion_create"),
-        )).execute(&*conn)?;
+    diesel::insert_into(tdsl::transfers).values((
+        tdsl::from_user.eq(msg.author.id.0 as i64),
+        tdsl::from_balance.eq(balance),
+        tdsl::ty.eq("pc"),
+        tdsl::quantity.eq(VOTE_BASE_COST as i64),
+        tdsl::happened_at.eq(chrono::Utc::now()),
+        tdsl::message_id.eq(msg.id.0 as i64),
+        tdsl::to_motion.eq(motion_id),
+        tdsl::to_votes.eq(1),
+        tdsl::transfer_ty.eq("motion_create"),
+    )).execute(&*txn)?;
 
-        Ok(())
-    })?;
-
+    RaiiTransaction::commit(txn)?;
     //let mut motion_message = ctx.http.get_message(MOTIONS_CHANNEL, motion_id_outer.unwrap() as u64)?;
-    if let Some(mut motion_message) = motion_message_outer {
-        update_motion_message(&ctx, &*conn, &mut motion_message)?;
-        let mut emojis:Vec<_> = (*SPECIAL_EMOJI).iter().collect();
-        emojis.sort_unstable_by_key(|(_,a)| match *a {
-            SpecialEmojiAction::Direction(false) => -2,
-            SpecialEmojiAction::Direction(true) => -1,
-            SpecialEmojiAction::Amount(a) => (*a) as i64
-        });
-        for (emoji_id, _) in emojis {
-            //dbg!(&emoji_id);
-            serenity::model::id::ChannelId::from(MOTIONS_CHANNEL)
-                .create_reaction(
-                    &ctx,
-                    &motion_message,
-                    serenity::model::channel::ReactionType::Custom{
-                        animated: false,
-                        id: (*emoji_id).into(),
-                        name: Some("no".to_string())
-                    }
-                ).unwrap()
-            ;
-        }
-
+    update_motion_message(&ctx, Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap()), &mut motion_message).await?;
+    let mut emojis:Vec<_> = (*SPECIAL_EMOJI).iter().collect();
+    emojis.sort_unstable_by_key(|(_,a)| match *a {
+        SpecialEmojiAction::Direction(false) => -2,
+        SpecialEmojiAction::Direction(true) => -1,
+        SpecialEmojiAction::Amount(a) => (*a) as i64
+    });
+    for (emoji_id, _) in emojis {
+        //dbg!(&emoji_id);
+        serenity::model::id::ChannelId::from(MOTIONS_CHANNEL)
+            .create_reaction(
+                &ctx,
+                &motion_message,
+                serenity::model::channel::ReactionType::Custom{
+                    animated: false,
+                    id: (*emoji_id).into(),
+                    name: Some("no".to_string())
+                }
+            ).await?
+        ;
     }
 
     Ok(())
@@ -921,7 +933,7 @@ const IGNORE_WORDS:&[&str] = &["in", "i", "I", "think", "say", "fuck", "hell"];
 
 #[command]
 #[min_args(1)]
-fn vote(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
+async fn vote(ctx:&Context, msg:&Message, mut args:Args) -> CommandResult {
     let checksummed_motion_id:String = args.single()?;
     //dbg!(&checksummed_motion_id);
     if let Some(digit_arr) = damm::validate(&checksummed_motion_id) {
@@ -954,8 +966,8 @@ fn vote(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
             }
         }
         //dbg!(&vote_count, &vote_direction);
-
-        let conn = ctx.data.read().get::<DbPoolKey>().unwrap().get()?;
+        
+        let conn = ctx.data.read().await.get::<DbPoolKey>().unwrap().get()?;
         let response = vote_common(
             &*conn,
             vote_direction,
@@ -965,7 +977,8 @@ fn vote(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
             None,
             Some(msg.id.0 as i64),
         );
-        msg.reply(&ctx, response).unwrap();
+        drop(conn);
+        msg.reply(ctx, response).await.unwrap();
         
         //msg.reply(&ctx, "Vote counted!").unwrap();
     }else{
@@ -977,7 +990,7 @@ fn vote(ctx:&mut Context, msg:&Message, mut args:Args) -> CommandResult {
 use std::borrow::Cow;
 
 pub fn vote_common(
-    //ctx: &mut Context,
+    //ctx: &Context,
     conn: &diesel::PgConnection,
     vote_direction:Option<bool>,
     vote_count:i64,

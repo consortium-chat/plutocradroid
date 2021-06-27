@@ -1,5 +1,5 @@
 use std::fs;
-use vergen::{ConstantsFlags, generate_cargo_keys};
+use vergen::{vergen, Config};
 use sha2::{Sha224, Digest};
 
 fn static_gen() {
@@ -81,11 +81,6 @@ fn {}() -> impl Responder<'static> {{
 }
 
 fn main() {
-    let mut flags = ConstantsFlags::all();
-    //Only one of SEMVER_FROM_CARGO_PKG and SEMVER can be set
-    //by unsetting this flag, version will be taken from git tags
-    flags.remove(ConstantsFlags::SEMVER_FROM_CARGO_PKG);
-
-    generate_cargo_keys(flags).unwrap();
+    vergen(Config::default()).unwrap();
     static_gen();
 }

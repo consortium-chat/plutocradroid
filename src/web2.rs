@@ -392,11 +392,11 @@ fn bare_page(title: impl AsRef<str>, content: Markup) -> Markup {
                     (content)
                     small.build-info {
                         "Plutocradroid "
-                        (env!("VERGEN_SEMVER_LIGHTWEIGHT"))
+                        (env!("VERGEN_GIT_SEMVER"))
                         " commit "
-                        (env!("VERGEN_SHA_SHORT"))
+                        (env!("VERGEN_GIT_SHA"))
                         " built for "
-                        (env!("VERGEN_TARGET_TRIPLE"))
+                        (env!("VERGEN_CARGO_TARGET_TRIPLE"))
                         " at "
                         (env!("VERGEN_BUILD_TIMESTAMP"))
                     }
