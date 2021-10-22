@@ -18,11 +18,9 @@ use crate::{schema, rocket_diesel};
 use crate::models::{Motion, MotionVote, MotionWithCount};
 use crate::bot::name_of;
 
-fn generate_state<A: rand::RngCore + rand::CryptoRng>(rng: &mut A) -> Result<String, String> {
+fn generate_state<A: rand::RngCore + rand::CryptoRng>(rng: &mut A) -> Result<String, &'static str> {
     let mut buf = [0; 16]; // 128 bits
-    rng.try_fill_bytes(&mut buf).map_err(|_| {
-        String::from("Failed to generate random data")
-    })?;
+    rng.try_fill_bytes(&mut buf).map_err(|_| "Failed to generate random data")?;
     Ok(base64::encode_config(&buf, base64::URL_SAFE_NO_PAD))
 }
 

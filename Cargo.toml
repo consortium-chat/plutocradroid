@@ -8,20 +8,20 @@ edition = "2018"
 
 [dependencies]
 serenity = "0.10.8"
-diesel = { version = "1.0.0", features = ["postgres", "r2d2", "chrono", "numeric"] }
+diesel = { version = "1.0.0", features = ["postgres", "r2d2", "chrono", "numeric", "extras"] }
 dotenv = "0.15.0"
 lazy_static = "*"
 regex = "1"
 chrono = "*"
 chrono-tz = "*"
-bigdecimal = "*"
+bigdecimal = "=0.1.2"
 maplit = "1.0.2"
 ordinal = "*"
 router = "*"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 csv = "1.1"
-rocket = "^0.4.5"
+rocket = "^0.4"
 rocket_oauth2 = "^0.4.1"
 log = "0.4.14"
 reqwest = { version = "0.11.4", features = ["blocking","rustls-tls-native-roots"] }
