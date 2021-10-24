@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use chrono::{DateTime,Utc};
+use diesel_derive_enum::DbEnum;
 
 #[derive(Clone,Debug,Serialize,Queryable)]
 pub struct Motion<'a> {
@@ -54,7 +55,7 @@ impl<'a> MotionWithCount<'a>{
     }
 
     pub fn end_at(&self) -> DateTime<Utc> {
-        self.last_result_change + *crate::bot::MOTION_EXPIRATION
+        self.last_result_change + *crate::MOTION_EXPIRATION
     }
 }
 
@@ -63,4 +64,33 @@ pub struct MotionVote {
     pub user:i64,
     pub direction:bool,
     pub amount:i64,
+}
+
+
+// create type transfer_type as enum (
+//     'motion_create',
+//     'motion_vote',
+//     'generated',
+//     'admin_fabricate',
+//     'admin_give',
+//     'give',
+//     'command_fabricate',
+//     --new
+//     'auction_create', --you've offered up some fungibles for bid
+//     'auction_reserve', --placing a bid, fungibles are held
+//     'auction_refund' --someone else outbid you, held fungibles are returned
+// );
+#[derive(Copy,Clone,PartialEq,Eq,Debug,DbEnum)]
+#[DieselType = "Transfer_type"]
+pub enum TransferType {
+    MotionCreate,
+    MotionVote,
+    Generated,
+    AdminFabricate,
+    AdminGive,
+    Give,
+    CommandFabricate,
+    AuctionCreate,
+    AuctionReserve,
+    AuctionRefund,
 }

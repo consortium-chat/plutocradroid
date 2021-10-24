@@ -690,7 +690,7 @@ fn my_transactions(
     }
     #[derive(Debug,Clone,Queryable)]
     struct Transaction {
-        pub rowid:i64,
+        //pub rowid:i64,
         pub balance:i64,
         pub quantity:i64,
         pub sign:i32,
@@ -700,7 +700,7 @@ fn my_transactions(
         pub other_party:Option<i64>,
         pub to_motion:Option<i64>,
         pub to_votes:Option<i64>,
-        pub message_id:Option<i64>,
+        //pub message_id:Option<i64>,
         pub transfer_ty:String,
     }
     #[derive(Debug,Clone)]
@@ -719,7 +719,7 @@ fn my_transactions(
     let txns:Option<(Vec<_>,bool)> = ctx.deets.as_ref().map(|deets| {
         let q = bh::balance_history
             .select((
-                bh::rowid,
+                //bh::rowid,
                 bh::balance,
                 bh::quantity,
                 bh::sign,
@@ -729,7 +729,7 @@ fn my_transactions(
                 bh::other_party,
                 bh::to_motion,
                 bh::to_votes,
-                bh::message_id,
+                //bh::message_id,
                 bh::transfer_ty,
             ))
             .filter(bh::user.eq(deets.id()))
@@ -745,7 +745,7 @@ fn my_transactions(
         let mut gen_txns:Vec<Transaction> = if let [.., last] = txns.as_slice() {
             bh::balance_history
                 .select((
-                    bh::rowid,
+                    //bh::rowid,
                     bh::balance,
                     bh::quantity,
                     bh::sign,
@@ -755,7 +755,7 @@ fn my_transactions(
                     bh::other_party,
                     bh::to_motion,
                     bh::to_votes,
-                    bh::message_id,
+                    //bh::message_id,
                     bh::transfer_ty,
                 ))
                 .filter(bh::user.eq(deets.id()))

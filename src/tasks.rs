@@ -1,29 +1,31 @@
 use std::sync::Arc;
 use serenity::framework::standard::CommandResult;
 use serenity::http::CacheHttp;
-use serenity::framework::standard::CommandError;
+use diesel::prelude::*;
+use tokio_diesel::AsyncRunQueryDsl;
 use crate::damm;
 use crate::schema;
 use crate::view_schema;
 use crate::bot;
 use crate::bot::DbPool;
 use crate::is_win::is_win;
+use crate::models::TransferType;
 
-pub async fn process_generators(
-    pool: Arc<DbPool>
-) -> Result<bool,CommandError> {
+pub fn process_generators(
+    conn: &diesel::PgConnection
+) -> Result<bool, diesel::result::Error> {
     // use schema::gen::dsl as gdsl;
     use schema::transfers::dsl as tdsl;
     use diesel::prelude::*;
     use view_schema::balance_history::dsl as bhdsl;
     use schema::single::dsl as sdsl;
     let now = chrono::Utc::now();
-    let conn = pool.get()?;
     let last_gen:chrono::DateTime<chrono::Utc> = sdsl::single.select(sdsl::last_gen).get_result(&*conn)?;
 
-    if now - last_gen < *bot::GENERATE_EVERY {
+    if now - last_gen < *crate::GENERATE_EVERY {
         return Ok(false);
     }
+    let this_gen = last_gen + *crate::GENERATE_EVERY;
     eprintln!("Generating some political capital!");
     let start_chrono = chrono::Utc::now();
     let start_instant = std::time::Instant::now();
@@ -38,6 +40,7 @@ pub async fn process_generators(
                     .select(bhdsl::balance)
                     .filter(bhdsl::user.eq(userid))
                     .filter(bhdsl::ty.eq(ty_str))
+                    .filter(bhdsl::happened_at.lt(this_gen)) //This ensures that a late generator run will still give pc to the owner of the gen at the time it was supposed to pay out
                     .order(bhdsl::happened_at.desc())
                     .limit(1)
                     .get_result(&*conn)
@@ -52,11 +55,11 @@ pub async fn process_generators(
                 tdsl::to_user.eq(userid),
                 tdsl::to_balance.eq(pc_balance + gen_balance),
                 tdsl::happened_at.eq(now),
-                tdsl::transfer_ty.eq("generated"),
+                tdsl::transfer_ty.eq(TransferType::Generated),
             )).execute(&*conn)?;
         }
 
-        diesel::update(sdsl::single).set(sdsl::last_gen.eq(last_gen + *bot::GENERATE_EVERY)).execute(&*conn)?;
+        diesel::update(sdsl::single).set(sdsl::last_gen.eq(this_gen)).execute(&*conn)?;
         
         Ok(())
     })?;
@@ -69,19 +72,18 @@ pub async fn process_generators(
 }
 
 pub async fn process_motion_completions(
-    pool: Arc<DbPool>,
+    pool: &Arc<DbPool>,
     cnh: &impl CacheHttp,
 ) -> CommandResult {
     use diesel::prelude::*;
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
     let now = chrono::Utc::now();
-    let conn = pool.get()?;
     let motions:Vec<(String, i64, bool)> = mdsl::motions
         .filter(mdsl::announcement_message_id.is_null())
-        .filter(mdsl::last_result_change.lt(now - *bot::MOTION_EXPIRATION))
+        .filter(mdsl::last_result_change.lt(now - *crate::MOTION_EXPIRATION))
         .select((mdsl::motion_text, mdsl::rowid, mdsl::is_super))
-        .get_results(&conn)?;
+        .get_results_async(&pool).await?;
     for (motion_text, motion_id, is_super) in &motions {
         #[derive(Queryable,Debug)]
         struct MotionVote {
@@ -92,7 +94,7 @@ pub async fn process_motion_completions(
         let votes:Vec<MotionVote> = mvdsl::motion_votes
             .filter(mvdsl::motion.eq(motion_id))
             .select((mvdsl::user, mvdsl::amount, mvdsl::direction))
-            .get_results(&conn)?;
+            .get_results_async(&pool).await?;
         let mut yes_votes = 0;
         let mut no_votes = 0;
         for vote in &votes {
@@ -126,17 +128,25 @@ pub async fn process_motion_completions(
 
         diesel::update(mdsl::motions.filter(mdsl::rowid.eq(motion_id))).set(
             mdsl::announcement_message_id.eq(announce_msg.id.0 as i64)
-        ).execute(&conn)?;
+        ).execute_async(&pool).await?;
     }
 
     let mmids:Vec<i64> = mdsl::motions
         .filter(mdsl::announcement_message_id.is_null())
         .filter(mdsl::needs_update)
         .select(mdsl::bot_message_id)
-        .get_results(&*conn)?;
+        .get_results_async(&pool).await?;
     for mmid in &mmids {
         let mut motion_message = cnh.http().get_message(bot::MOTIONS_CHANNEL, *mmid as u64).await?;
         bot::update_motion_message(cnh, Arc::clone(&pool), &mut motion_message).await?;
     }
+    Ok(())
+}
+
+pub fn update_last_task_run(
+    conn: &diesel::PgConnection
+) -> Result<(), diesel::result::Error> {
+    use schema::single::dsl as sdsl;
+    diesel::update(sdsl::single).set(sdsl::last_task_run.eq(diesel::dsl::now)).execute(conn)?;
     Ok(())
 }

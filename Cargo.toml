@@ -9,6 +9,7 @@ edition = "2018"
 [dependencies]
 serenity = "0.10.8"
 diesel = { version = "1.0.0", features = ["postgres", "r2d2", "chrono", "numeric", "extras"] }
+diesel-derive-enum = { version = "1", features = ["postgres"] } 
 dotenv = "0.15.0"
 lazy_static = "*"
 regex = "1"

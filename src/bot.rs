@@ -3,7 +3,6 @@ use crate::view_schema;
 use crate::damm;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio_diesel::*;
 
@@ -34,7 +33,7 @@ use tokio::task;
 use async_trait::async_trait;
 
 use crate::is_win::is_win;
-use crate::tasks;
+use crate::models::TransferType;
 
 pub type DbPool = diesel::r2d2::Pool<diesel::r2d2::ConnectionManager<diesel::PgConnection>>;
 
@@ -78,17 +77,6 @@ lazy_static! {
     };
 }
 
-#[cfg(feature = "debug")]
-lazy_static! {
-    pub static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::seconds(30);
-    pub static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::minutes(20);
-}
-
-#[cfg(not(feature = "debug"))]
-lazy_static! {
-    pub static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::hours(24);
-    pub static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::hours(48);
-}
 
 pub const VOTE_BASE_COST:u16 = 40;
 #[cfg(not(feature = "debug"))]
@@ -239,9 +227,7 @@ async fn after_hook(ctx: &Context, msg: &Message, _cmd_name: &str, error: Result
 
 pub async fn bot_main() {
     trace!("bot_main begin");
-    lazy_static::initialize(&GENERATE_EVERY);
     lazy_static::initialize(&USER_PING_RE);
-    lazy_static::initialize(&MOTION_EXPIRATION);
 
     let raw_pool = diesel::r2d2::Builder::new().build(
         diesel::r2d2::ConnectionManager::<diesel::PgConnection>::new(
@@ -299,41 +285,6 @@ pub async fn bot_main() {
     let mut write_handle = client.data.write().await;
     write_handle.insert::<DbPoolKey>(Arc::clone(&arc_pool));
     drop(write_handle);
-    let cnh = Arc::clone(&client.cache_and_http);
-    let announce_threads_pool = Arc::clone(&arc_pool);
-    let announce_threads_http = Arc::clone(&cnh);
-    task::spawn(async move {
-        loop {
-            /* not properly locking, but should only have one thread trying to access */
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            match tasks::process_motion_completions(Arc::clone(&announce_threads_pool), &announce_threads_http).await {
-                Ok(()) => (),
-                Err(e) => warn!("Could not query for completed motions, {:?}", e),
-            }
-        }
-    });
-    trace!("Made announce thread");
-
-    let threads_pool = Arc::clone(&arc_pool);
-    task::spawn(async move {
-        let mut fast = false;
-        loop {
-            if !fast {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            } else {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            match tasks::process_generators(Arc::clone(&threads_pool)).await {
-                Ok(do_fast) => fast = do_fast,
-                Err(e) => {
-                    fast = false;
-                    warn!("Could process generator payouts, {:?}", e)
-                },
-            }
-        }
-    });
-    drop(arc_pool);
-    trace!("Made process_generators thread");
 
     #[cfg(not(feature = "debug"))]
     println!("Prod mode.");
@@ -475,7 +426,7 @@ async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResul
             tdsl::happened_at.eq(chrono::Utc::now()),
             tdsl::message_id.eq(msg.id.0 as i64),
             tdsl::ty.eq(ty.db_name()),
-            tdsl::transfer_ty.eq("command_fabricate"),
+            tdsl::transfer_ty.eq(TransferType::CommandFabricate),
         )).execute(&*txn)?;
 
         Ok(())
@@ -688,7 +639,7 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
                 happened_at:chrono::DateTime<chrono::Utc>,
                 message_id:i64,
                 ty:String,
-                transfer_ty:&'static str,
+                transfer_ty:TransferType,
             }
 
             let from_balance;
@@ -710,7 +661,7 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
                 happened_at: chrono::Utc::now(),
                 message_id: msg.id.0 as i64,
                 ty: ty.db_name().into(),
-                transfer_ty: "give",
+                transfer_ty: TransferType::Give,
             };
 
             diesel::insert_into(schema::transfers::table).values(&t).execute(&*txn)?;
@@ -772,7 +723,7 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
         return Ok(());
     }
     
-    let motion_id:i64 = diesel::insert_into(schema::motion_ids::table).default_values().returning(schema::motion_ids::dsl::rowid).get_result_async(&*pool).await?;
+    let motion_id:i64 = diesel::insert_into(schema::thing_ids::table).default_values().returning(schema::thing_ids::dsl::rowid).get_result_async(&*pool).await?;
 
     let cap_label = if is_super { "Supermotion" } else { "Simple Motion" };
     let mut bot_msg = serenity::model::id::ChannelId(MOTIONS_CHANNEL).send_message(&ctx, |m| {
@@ -829,7 +780,7 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
             tdsl::message_id.eq(msg.id.0 as i64),
             tdsl::to_motion.eq(motion_id),
             tdsl::to_votes.eq(1),
-            tdsl::transfer_ty.eq("motion_create"),
+            tdsl::transfer_ty.eq(TransferType::MotionCreate),
         )).execute(&*txn)?;
 
         Ok(())
@@ -1023,7 +974,14 @@ pub fn vote_common(
 
         let res:Option<(i64, bool, bool, i64)> = mdsl::motions
         .filter(mdsl::rowid.eq(motion_id.unwrap_or(-1)).or(mdsl::bot_message_id.eq(message_id.unwrap_or(-1))))
-        .select((mdsl::rowid, mdsl::announcement_message_id.is_null(), mdsl::is_super, mdsl::bot_message_id))
+        .select((
+            mdsl::rowid,
+            mdsl::announcement_message_id.is_null().and(
+                mdsl::last_result_change.gt(chrono::Utc::now() - *crate::MOTION_EXPIRATION)
+            ),
+            mdsl::is_super,
+            mdsl::bot_message_id,
+        ))
         .for_update()
         .get_result(conn)
         .optional()?;
@@ -1141,7 +1099,7 @@ pub fn vote_common(
                     tdsl::message_id.eq(command_message_id),
                     tdsl::to_motion.eq(motion_id),
                     tdsl::to_votes.eq(vote_count),
-                    tdsl::transfer_ty.eq("motion_vote"),
+                    tdsl::transfer_ty.eq(TransferType::MotionVote),
                 )).execute(&*conn)?;
                 //dbg!();
 
