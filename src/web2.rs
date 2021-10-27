@@ -367,9 +367,11 @@ fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Mar
                     li { (amount) (name) }
                 }
             }
-            a href="/" { "Home" }
+            a href="/" { "Motions" }
             " | "
             a href="/my-transactions" { "My Transactions" }
+            " | "
+            a href="/auctions" { "Auctions" }
         } @else {
             form action="/login/discord" method="post" {
                 input type="hidden" name="csrf" value=(ctx.csrf_token);
@@ -587,7 +589,7 @@ fn auction_bid(
             tdsl::auction_id.eq(auction.auction_id),
         )).execute(&*ctx).unwrap();
 
-        res = Some(RocketIsDumb::R(Redirect::temporary(format!("/auctions/{}", damm_id))));
+        res = Some(RocketIsDumb::R(Redirect::to(format!("/auctions/{}", damm_id))));
         Ok(())
     }).unwrap();
 
@@ -596,6 +598,7 @@ fn auction_bid(
             (fail_msg)
             br;
             a href={"/auctions/" (damm_id)} { "Return to auction" }
+            br;
             a href="/" { "Return home" }
         }))
     } else {
