@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc, SecondsFormat, TimeZone};
 use serenity::model::prelude::UserId;
 
 use crate::{schema, view_schema, rocket_diesel};
-use crate::models::{Motion, MotionVote, MotionWithCount, AuctionWinner};
+use crate::models::{Motion, MotionVote, MotionWithCount, AuctionWinner, TransferType};
 use crate::bot::name_of;
 
 fn generate_state<A: rand::RngCore + rand::CryptoRng>(rng: &mut A) -> Result<String, &'static str> {
@@ -968,7 +968,8 @@ fn my_transactions(
         pub to_motion:Option<i64>,
         pub to_votes:Option<i64>,
         //pub message_id:Option<i64>,
-        pub transfer_ty:String,
+        pub transfer_ty:TransferType,
+        pub auction_id:Option<i64>,
     }
     let transaction_cols = (
         //bh::rowid,
@@ -983,6 +984,7 @@ fn my_transactions(
         bh::to_votes,
         //bh::message_id,
         bh::transfer_ty,
+        bh::auction_id,
     );
     #[derive(Debug,Clone)]
     enum TransactionView {
@@ -1003,7 +1005,7 @@ fn my_transactions(
             .filter(bh::user.eq(deets.id()))
             .filter(coalesce_2(bh::ty.nullable().eq(fun_ty.as_option()).nullable(), true))
             .filter(coalesce_2(bh::happened_at.nullable().lt(Utc.timestamp_millis_opt(before_ms).single()).nullable(),true))
-            .filter(bh::transfer_ty.ne("generated"))
+            .filter(bh::transfer_ty.ne(TransferType::Generated))
             .order(bh::happened_at.desc())
             .limit(limit+1);
         info!("{}", diesel::debug_query(&q));
@@ -1017,7 +1019,7 @@ fn my_transactions(
                 .filter(coalesce_2(bh::ty.nullable().eq(fun_ty.as_option()).nullable(), true))
                 .filter(coalesce_2(bh::happened_at.nullable().lt(Utc.timestamp_millis_opt(before_ms).single()).nullable(),true))
                 .filter(bh::happened_at.gt(last.happened_at))
-                .filter(bh::transfer_ty.eq("generated"))
+                .filter(bh::transfer_ty.eq(TransferType::Generated))
                 .order(bh::happened_at.desc())
                 .get_results(&*ctx)
                 .unwrap()
@@ -1093,37 +1095,83 @@ fn my_transactions(
                                     }
                                 }
                                 td {
-                                    @if ["give", "admin_give"].contains(&txn.transfer_ty.as_str()) {
-                                        @if txn.transfer_ty.as_str() == "admin_give" {
-                                            "admin "
-                                        }
-                                        @if txn.sign < 0 {
-                                            "transfer to "
-                                        } @else {
-                                            "transfer from "
-                                        }
-                                        "user#\u{200B}"
-                                        (txn.other_party.unwrap())
-                                    } @else if txn.transfer_ty.as_str() == "motion_create" {
-                                        @let damm_id = crate::damm::add_to_str(txn.to_motion.unwrap().to_string());
-                                        "1 vote, created "
-                                        a href=(uri!(motion_listing:damm_id = &damm_id)) {
-                                            "motion #"
-                                            (&damm_id)
-                                        }
-                                    } @else if let (Some(motion_id), Some(votes)) = (&txn.to_motion, &txn.to_votes) {
-                                        // transfer_ty == "motion_vote"
-                                        @let damm_id = crate::damm::add_to_str(motion_id.to_string());
-                                        (votes)
-                                        " vote(s) on "
-                                        a href=(uri!(motion_listing:damm_id = &damm_id)) {
-                                            "motion #"
-                                            (&damm_id)
-                                        }
-                                    } @else if ["admin_fabricate","command_fabricate"].contains(&txn.transfer_ty.as_str()) {
-                                        "fabrication"
+                                    @match txn.transfer_ty {
+                                        TransferType::Give | TransferType::AdminGive => {
+                                            @if txn.transfer_ty == TransferType::AdminGive {
+                                                "admin "
+                                            }
+                                            @if txn.sign < 0 {
+                                                "transfer to "
+                                            } @else {
+                                                "transfer from "
+                                            }
+                                            "user#\u{200B}"
+                                            (txn.other_party.unwrap())
+                                        },
+                                        TransferType::MotionCreate => {
+                                            @let damm_id = crate::damm::add_to_str(txn.to_motion.unwrap().to_string());
+                                            "1 vote, created "
+                                            a href=(uri!(motion_listing:damm_id = &damm_id)) {
+                                                "motion #"
+                                                (&damm_id)
+                                            }
+                                        },
+                                        TransferType::MotionVote => {
+                                            @let motion_id = &txn.to_motion.unwrap();
+                                            @let votes = &txn.to_votes.unwrap();
+                                            @let damm_id = crate::damm::add_to_str(motion_id.to_string());
+                                            (votes)
+                                            " vote(s) on "
+                                            a href=(uri!(motion_listing:damm_id = &damm_id)) {
+                                                "motion #"
+                                                (&damm_id)
+                                            }
+                                        },
+                                        TransferType::AdminFabricate | TransferType::CommandFabricate => {
+                                            "fabrication"
+                                        },
+                                        TransferType::AuctionCreate => {
+                                            @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
+                                            "Created "
+                                            a href=(uri!(auction_view:damm_id = &damm_id)) {
+                                                "auction #"
+                                                (&damm_id)
+                                            }
+                                        },
+                                        TransferType::AuctionReserve => {
+                                            @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
+                                            "Bid on "
+                                            a href=(uri!(auction_view:damm_id = &damm_id)) {
+                                                "auction #"
+                                                (&damm_id)
+                                            }
+                                        },
+                                        TransferType::AuctionRefund => {
+                                            @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
+                                            "Outbid on "
+                                            a href=(uri!(auction_view:damm_id = &damm_id)) {
+                                                "auction #"
+                                                (&damm_id)
+                                            }
+                                        },
+                                        TransferType::AuctionPayout => {
+                                            @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
+                                            "Won the bid, payout for "
+                                            a href=(uri!(auction_view:damm_id = &damm_id)) {
+                                                "auction #"
+                                                (&damm_id)
+                                            }
+                                        },
+                                        TransferType::Generated => "unreachable",
                                     }
-                                    " "
+                                    // @if txn.transfer_ty == TransferType::Give || txn.transfer_ty == TransferType::AdminGive {
+                                    // } @else if txn.transfer_ty == TransferType::MotionCreate {
+                                    // } @else if let (Some(motion_id), Some(votes)) = (&txn.to_motion, &txn.to_votes) {
+                                    //     assert_eq!(txn.transfer_ty, MotionVote);
+                                    // } @else if txn.transfer_ty == TransferType::AdminFabricate || txn.transfer_ty == TransferType::CommandFabricate {
+                                    //     "fabrication"
+                                    // }
+                                    // " "
                                     @if let Some(comment) = &txn.comment {
                                         "“" (comment) "”"
                                     }

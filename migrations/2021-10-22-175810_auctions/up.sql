@@ -87,7 +87,8 @@ create view balance_history as
     "message_id",
     "to_motion",
     "to_votes",
-    "transfer_ty"
+    "transfer_ty",
+    "auction_id"
   from transfers 
   where
     "from_user" is not null
@@ -105,7 +106,8 @@ create view balance_history as
     "message_id",
     NULL::bigint as "to_motion",
     NULL::bigint as "to_votes",
-    "transfer_ty"
+    "transfer_ty",
+    "auction_id"
   from transfers
   where
     "to_user" is not null

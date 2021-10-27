@@ -1,4 +1,7 @@
 table! {
+    use diesel::sql_types::*;
+    use crate::models::Transfer_type;
+
     balance_history (rowid, sign) {
         rowid -> Int8,
         user -> Int8,
@@ -12,7 +15,8 @@ table! {
         message_id -> Nullable<Int8>,
         to_motion -> Nullable<Int8>,
         to_votes -> Nullable<Int8>,
-        transfer_ty -> Text,
+        transfer_ty -> Transfer_type,
+        auction_id -> Nullable<Int8>,
     }
 }
 
