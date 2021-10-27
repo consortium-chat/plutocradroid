@@ -504,23 +504,27 @@ fn auction_bid(
     ctx.conn.transaction::<_,diesel::result::Error,_>(|| {
         use view_schema::balance_history::dsl as bhdsl;
         use schema::transfers::dsl as tdsl;
+        use schema::auctions::dsl as adsl;
         use view_schema::auction_and_winner::dsl as anw;
         
-        let maybe_auction:Option<AuctionWinner> = anw::auction_and_winner
-        .select(AuctionWinner::cols())
-        .filter(anw::auction_id.eq(id))
+        let maybe_auction_id:Option<i64> = adsl::auctions
+        .select(adsl::rowid)
+        .filter(adsl::rowid.eq(id))
         .for_update()
         .get_result(&*ctx)
         .optional()
         .unwrap();
 
-        let auction;
-        if let Some(a) = maybe_auction {
-            auction = a;
-        } else {
+        if maybe_auction_id.is_none() {
             res = Some(RocketIsDumb::S(rocket::http::Status::NotFound));
             return Ok(());
         }
+
+        let auction:AuctionWinner = anw::auction_and_winner
+        .select(AuctionWinner::cols())
+        .filter(anw::auction_id.eq(id))
+        .get_result(&*ctx)
+        .unwrap();
 
         if now > auction.end_at() {
             fail_msg = Some("Bid failed: Auction has ended");
