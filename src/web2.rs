@@ -14,8 +14,8 @@ use diesel::prelude::*;
 use chrono::{DateTime, Utc, SecondsFormat, TimeZone};
 use serenity::model::prelude::UserId;
 
-use crate::{schema, rocket_diesel};
-use crate::models::{Motion, MotionVote, MotionWithCount};
+use crate::{schema, view_schema, rocket_diesel};
+use crate::models::{Motion, MotionVote, MotionWithCount, AuctionWinner};
 use crate::bot::name_of;
 
 fn generate_state<A: rand::RngCore + rand::CryptoRng>(rng: &mut A) -> Result<String, &'static str> {
@@ -74,6 +74,12 @@ struct VoteForm {
     csrf: String,
     count: i64,
     direction: String,
+}
+
+#[derive(Debug, Clone, FromForm)]
+struct BidForm {
+    csrf: String,
+    amount: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -176,6 +182,8 @@ impl From<()> for CommonContextError {
     }
 }
 
+// If you call something the "God Object", then people get mad and say it's bad design.
+// But if you call it the "context", that's fine!
 struct CommonContext<'a> {
     pub csrf_token: String,
     pub cookies: Cookies<'a>,
@@ -404,6 +412,281 @@ fn bare_page(title: impl AsRef<str>, content: Markup) -> Markup {
     }
 }
 
+
+fn display_auction(auction:&AuctionWinner) -> Markup {
+    html!{
+        div class=(if auction.finished { "auction auction-finished" } else { "auction auction-pending" }) {
+            div style="font-weight: bold" {
+                a href=(format!("/auctions/{}", auction.damm())) {
+                    "Auction#"
+                    (auction.damm())
+                }
+            }
+            div {
+                (auction.auctioneer.map(|a| name_of(serenity::model::id::UserId::from(a as u64))).unwrap_or("The CONsortium".into()))
+                @if auction.finished {
+                    " offered "
+                } @else {
+                    " offers "
+                }
+                (auction.offer_amt) " " (auction.offer_ty)
+                " for "
+                (auction.bid_ty)
+                "."
+                br;
+                @if auction.finished {
+                    @if let Some(winner_id) = auction.winner_id {
+                        "Auction won by "
+                        (name_of(serenity::model::id::UserId::from(winner_id as u64)))
+                        " for "
+                        (auction.winner_bid.unwrap()) " " (auction.bid_ty)
+                        "."
+                    } @else {
+                        "Auction expired with no winner."
+                    }
+                } @else {
+                    @if let Some(winner_id) = auction.winner_id {
+                        "Current bid is "
+                        (auction.winner_bid.unwrap()) " " (auction.bid_ty)
+                        " by "
+                        (name_of(serenity::model::id::UserId::from(winner_id as u64)))
+                    } @else {
+                        "No bids. Minimum bid is " (auction.bid_min) " " (auction.bid_ty) "."
+                    }
+                    br;
+                    "Auction will end at "
+                    time datetime=(auction.end_at().to_rfc3339()) {
+                        (auction.end_at().with_timezone(&chrono_tz::America::Los_Angeles).to_rfc3339_opts(SecondsFormat::Secs, true))
+                    }
+                    " if no further bids are placed."
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug,Responder)]
+enum RocketIsDumb {
+    S(rocket::http::Status),
+    R(Redirect),
+    M(Markup),
+}
+
+#[post("/auctions/<damm_id>/bid", data = "<data>")]
+fn auction_bid(
+    mut ctx: CommonContext,
+    data: LenientForm<BidForm>,
+    damm_id: String,
+) -> RocketIsDumb {
+    let now = Utc::now();
+    let id:i64;
+    if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
+        id = atoi::atoi(digits.as_slice()).unwrap();
+    } else {
+        info!("bad id");
+        return RocketIsDumb::S(rocket::http::Status::NotFound);
+    }
+    if ctx.cookies.get("csrf_protection_token").map(|token| token.value()) != Some(data.csrf.as_str()) {
+        return RocketIsDumb::S(rocket::http::Status::BadRequest);
+    }
+
+    let deets:&Deets;
+    if let Some(d) = ctx.deets.as_ref() {
+        deets = d;
+    } else {
+        info!("no deets");
+        return RocketIsDumb::S(rocket::http::Status::Unauthorized);
+    }
+
+    let mut res:Option<RocketIsDumb> = None;
+    let mut fail_msg:Option<&'static str> = None;
+
+    ctx.conn.transaction::<_,diesel::result::Error,_>(|| {
+        use view_schema::balance_history::dsl as bhdsl;
+        use schema::transfers::dsl as tdsl;
+        use view_schema::auction_and_winner::dsl as anw;
+        
+        let maybe_auction:Option<AuctionWinner> = anw::auction_and_winner
+        .select(AuctionWinner::cols())
+        .filter(anw::auction_id.eq(id))
+        .for_update()
+        .get_result(&*ctx)
+        .optional()
+        .unwrap();
+
+        let auction;
+        if let Some(a) = maybe_auction {
+            auction = a;
+        } else {
+            res = Some(RocketIsDumb::S(rocket::http::Status::NotFound));
+            return Ok(());
+        }
+
+        if now > auction.end_at() {
+            fail_msg = Some("Bid failed: Auction has ended");
+            return Ok(());
+        }
+
+        if Some(deets.id()) == auction.winner_id {
+            fail_msg = Some("Bid failed: You cannot increase your own bid.");
+            return Ok(());
+        }
+        let mut to_lock = vec![];
+        to_lock.push(deets.id());
+        if let Some(prev_bidder) = auction.winner_id {
+            if prev_bidder != deets.id() {
+                to_lock.push(prev_bidder);
+            }
+        }
+        to_lock.sort();
+        for id in to_lock {
+            bhdsl::balance_history
+            .select(bhdsl::rowid)
+            .filter(bhdsl::user.eq(id))
+            .filter(bhdsl::ty.eq(&auction.bid_ty))
+            .for_update()
+            .execute(&*ctx)?;
+        }
+        let get_balance = |id| bhdsl::balance_history
+        .select(bhdsl::balance)
+        .filter(bhdsl::user.eq(id))
+        .filter(bhdsl::ty.eq(&auction.bid_ty))
+        .get_result(&*ctx)
+        .unwrap():i64;
+        let curr_user_balance = get_balance(deets.id());
+        if curr_user_balance < data.amount.into():i64 {
+            fail_msg = Some("Bid failed: You do not have enough fungibles.");
+            return Ok(());
+        }
+
+        if let Some(prev_winner_id) = auction.winner_id {
+            let prev_winner_balance = get_balance(prev_winner_id);
+            //return prev_winner's fungibles
+            diesel::insert_into(tdsl::transfers).values((
+                tdsl::ty.eq(&auction.bid_ty),
+                tdsl::quantity.eq(&auction.winner_bid.unwrap()),
+                tdsl::to_user.eq(prev_winner_id),
+                tdsl::to_balance.eq(prev_winner_balance + auction.winner_bid.unwrap()),
+                tdsl::happened_at.eq(diesel::dsl::now),
+                tdsl::transfer_ty.eq(crate::models::TransferType::AuctionRefund),
+                tdsl::auction_id.eq(&auction.auction_id),
+            )).execute(&*ctx).unwrap();
+        }
+
+        diesel::insert_into(tdsl::transfers).values((
+            tdsl::ty.eq(&auction.bid_ty),
+            tdsl::quantity.eq(data.amount as i64),
+            tdsl::from_user.eq(deets.id()),
+            tdsl::from_balance.eq(curr_user_balance - (data.amount as i64)),
+            tdsl::happened_at.eq(diesel::dsl::now),
+            tdsl::transfer_ty.eq(crate::models::TransferType::AuctionReserve),
+            tdsl::auction_id.eq(auction.auction_id),
+        )).execute(&*ctx).unwrap();
+
+        res = Some(RocketIsDumb::R(Redirect::temporary(format!("/auctions/{}", damm_id))));
+        Ok(())
+    }).unwrap();
+
+    if let Some(fail_msg) = fail_msg {
+        RocketIsDumb::M(page(&mut ctx, "Auction bid failed", html!{
+            (fail_msg)
+            br;
+            a href={"/auctions/" (damm_id)} { "Return to auction" }
+            a href="/" { "Return home" }
+        }))
+    } else {
+        res.unwrap()
+    }
+}
+
+#[get("/auctions/<damm_id>")]
+fn auction_view(
+    damm_id: String,
+    mut ctx: CommonContext,
+) -> impl Responder<'static> {
+    let id:i64;
+    if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
+        id = atoi::atoi(digits.as_slice()).unwrap();
+    } else {
+        return None;
+    }
+    use crate::models::AuctionWinner;
+    use crate::view_schema::auction_and_winner::dsl as anw;
+
+    let maybe_auction = anw::auction_and_winner
+    .select(AuctionWinner::cols())
+    .filter(anw::auction_id.eq(id))
+    .get_result(&*ctx)
+    .optional()
+    .unwrap();
+
+    let auction;
+    if let Some(a) = maybe_auction {
+        auction = a;
+    } else {
+        return None;
+    }
+
+    let content = html!{
+        (display_auction(&auction))
+        @if !auction.finished {
+            @if ctx.deets.is_some() {
+                form action={"/auctions/" (damm_id) "/bid"} method="post" {
+                    input type="hidden" name="csrf" value=(ctx.csrf_token.clone());
+                    "Bid "
+                    input type="number" name="amount" min=(auction.current_min_bid()) value=(auction.current_min_bid());
+                    (auction.bid_ty)
+                    br;
+                    button type="submit" { "Place bid" }
+                }
+            } @else {
+                div { "Log in to bid" }
+            }
+        }
+    };
+
+    Some(page(&mut ctx, format!("Auction#{}", damm_id), content))
+}
+
+#[get("/auctions")]
+fn auction_index(
+    mut ctx: CommonContext,
+) -> impl Responder<'static> {
+    use crate::view_schema::auction_and_winner::dsl as anw;
+    let pending_auctions:Vec<AuctionWinner> =
+        anw::auction_and_winner
+        .select(AuctionWinner::cols())
+        .filter(anw::finished.eq(false))
+        .order((
+            anw::created_at.desc(),
+        ))
+        .get_results(&*ctx)
+        .unwrap()
+    ;
+    let finished_auctions:Vec<AuctionWinner> =
+        anw::auction_and_winner
+        .select(AuctionWinner::cols())
+        .filter(anw::finished.eq(true))
+        .order((
+            anw::created_at.desc(),
+        ))
+        .get_results(&*ctx)
+        .unwrap()
+    ;
+    page(&mut ctx, "Auctions", html!{
+        h3 { "Pending auctions" }
+        @for auction in pending_auctions {
+            (display_auction(&auction))
+        }
+
+        hr;
+        h3 { "Finished auctions" }
+        @for auction in finished_auctions {
+            (display_auction(&auction))
+        }
+    })
+}
+
 #[post("/motions/<damm_id>/vote", data = "<data>")]
 fn motion_vote(
     mut ctx: CommonContext,
@@ -467,15 +750,7 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
 
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
-    let maybe_motion:Option<Motion> = mdsl::motions.select((
-        mdsl::rowid,
-        mdsl::bot_message_id,
-        mdsl::motion_text,
-        mdsl::motioned_at,
-        mdsl::last_result_change,
-        mdsl::is_super,
-        mdsl::announcement_message_id,
-    )).filter(mdsl::rowid.eq(id)).get_result(&*ctx).optional().unwrap();
+    let maybe_motion:Option<Motion> = mdsl::motions.select(Motion::cols()).filter(mdsl::rowid.eq(id)).get_result(&*ctx).optional().unwrap();
     
     let motion;
     if let Some(m) = maybe_motion {
@@ -485,7 +760,7 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
     }
 
     let votes:Vec<MotionVote> = mvdsl::motion_votes
-        .select((mvdsl::user, mvdsl::direction, mvdsl::amount))
+        .select(MotionVote::cols())
         .filter(mvdsl::motion.eq(motion.rowid))
         .get_results(&*ctx)
         .unwrap();
@@ -559,15 +834,7 @@ fn index(mut ctx: CommonContext, filter: MotionListFilter) -> impl Responder<'st
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
     let bare_motions:Vec<Motion> = mdsl::motions
-        .select((
-            mdsl::rowid,
-            mdsl::bot_message_id,
-            mdsl::motion_text,
-            mdsl::motioned_at,
-            mdsl::last_result_change,
-            mdsl::is_super,
-            mdsl::announcement_message_id,
-        ))
+        .select(Motion::cols())
         .order((mdsl::announcement_message_id.is_null().desc(), mdsl::rowid.desc()))
         .get_results(&*ctx)
         .unwrap();
@@ -703,6 +970,20 @@ fn my_transactions(
         //pub message_id:Option<i64>,
         pub transfer_ty:String,
     }
+    let transaction_cols = (
+        //bh::rowid,
+        bh::balance,
+        bh::quantity,
+        bh::sign,
+        bh::happened_at,
+        bh::ty,
+        bh::comment,
+        bh::other_party,
+        bh::to_motion,
+        bh::to_votes,
+        //bh::message_id,
+        bh::transfer_ty,
+    );
     #[derive(Debug,Clone)]
     enum TransactionView {
         Generated{amt: i64, bal: i64},
@@ -718,20 +999,7 @@ fn my_transactions(
     };
     let txns:Option<(Vec<_>,bool)> = ctx.deets.as_ref().map(|deets| {
         let q = bh::balance_history
-            .select((
-                //bh::rowid,
-                bh::balance,
-                bh::quantity,
-                bh::sign,
-                bh::happened_at,
-                bh::ty,
-                bh::comment,
-                bh::other_party,
-                bh::to_motion,
-                bh::to_votes,
-                //bh::message_id,
-                bh::transfer_ty,
-            ))
+            .select(transaction_cols)
             .filter(bh::user.eq(deets.id()))
             .filter(coalesce_2(bh::ty.nullable().eq(fun_ty.as_option()).nullable(), true))
             .filter(coalesce_2(bh::happened_at.nullable().lt(Utc.timestamp_millis_opt(before_ms).single()).nullable(),true))
@@ -744,20 +1012,7 @@ fn my_transactions(
         info!("{} txns results", txns.len());
         let mut gen_txns:Vec<Transaction> = if let [.., last] = txns.as_slice() {
             bh::balance_history
-                .select((
-                    //bh::rowid,
-                    bh::balance,
-                    bh::quantity,
-                    bh::sign,
-                    bh::happened_at,
-                    bh::ty,
-                    bh::comment,
-                    bh::other_party,
-                    bh::to_motion,
-                    bh::to_votes,
-                    //bh::message_id,
-                    bh::transfer_ty,
-                ))
+                .select(transaction_cols)
                 .filter(bh::user.eq(deets.id()))
                 .filter(coalesce_2(bh::ty.nullable().eq(fun_ty.as_option()).nullable(), true))
                 .filter(coalesce_2(bh::happened_at.nullable().lt(Utc.timestamp_millis_opt(before_ms).single()).nullable(),true))
@@ -1036,15 +1291,7 @@ fn motions_api_compat(
 ) -> impl Responder {
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
-    let bare_motions:Vec<Motion> = mdsl::motions.select((
-        mdsl::rowid,
-        mdsl::bot_message_id,
-        mdsl::motion_text,
-        mdsl::motioned_at,
-        mdsl::last_result_change,
-        mdsl::is_super,
-        mdsl::announcement_message_id,
-    )).get_results(&*ctx).unwrap();
+    let bare_motions:Vec<Motion> = mdsl::motions.select(Motion::cols()).get_results(&*ctx).unwrap();
 
     let get_vote_count = |motion_id:i64, dir:bool| -> Result<i64, diesel::result::Error> {
         use bigdecimal::{BigDecimal,ToPrimitive};
@@ -1081,6 +1328,9 @@ pub fn main() {
             motions_api_compat,
             logout,
             my_transactions,
+            auction_index,
+            auction_bid,
+            auction_view,
         ])
         .launch();
 }

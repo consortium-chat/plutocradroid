@@ -24,12 +24,18 @@ mod tasks;
 
 use std::{env,panic,process};
 
+#[cfg(feature = "debug")]
+pub const SITE_URL:&str = "https://pluto-test.shelvacu.com";
+#[cfg(not(feature = "debug"))]
+pub const SITE_URL:&str = "https://motions.consortium.chat";
 
 #[cfg(feature = "debug")]
 lazy_static! {
     pub static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::seconds(30);
     pub static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::minutes(20);
     pub static ref AUCTION_EXPIRATION:chrono::Duration = chrono::Duration::minutes(20);
+    pub static ref AUTO_AUCTION_AT:chrono::NaiveTime = chrono::NaiveTime::from_hms(23, 34, 45);
+    pub static ref AUTO_AUCTION_EVERY:chrono::Duration = chrono::Duration::days(1);
 }
 
 #[cfg(not(feature = "debug"))]
@@ -37,12 +43,16 @@ lazy_static! {
     pub static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::hours(24);
     pub static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::hours(48);
     pub static ref AUCTION_EXPIRATION:chrono::Duration = chrono::Duration::hours(48);
+    pub static ref AUTO_AUCTION_AT:chrono::NaiveTime = chrono::NaiveTime::from_hms(7,0,0);
+    pub static ref AUTO_AUCTION_EVERY:chrono::Duration = chrono::Duration::days(7);
 }
 
 fn main() {
     lazy_static::initialize(&GENERATE_EVERY);
     lazy_static::initialize(&MOTION_EXPIRATION);
     lazy_static::initialize(&AUCTION_EXPIRATION);
+    lazy_static::initialize(&AUTO_AUCTION_AT);
+    lazy_static::initialize(&AUTO_AUCTION_EVERY);
     dotenv::dotenv().unwrap();
 
     //Die on error

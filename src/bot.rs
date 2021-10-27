@@ -311,13 +311,12 @@ pub async fn update_motion_message(
     use diesel::prelude::*;
     
     let (motion_text, motion_id, is_super) = mdsl::motions.filter(mdsl::bot_message_id.eq(msg.id.0 as i64)).select((mdsl::motion_text, mdsl::rowid, mdsl::is_super)).get_result_async(&*pool).await?:(String, i64, bool);
-    #[derive(Queryable,Debug)]
-    struct MotionVote {
-        user:i64,
-        amount:i64,
-        direction:bool,
-    }
-    let mut votes:Vec<MotionVote> = mvdsl::motion_votes.filter(mvdsl::motion.eq(motion_id)).select((mvdsl::user, mvdsl::amount, mvdsl::direction)).get_results_async(&*pool).await?;
+    use crate::models::MotionVote;
+    let mut votes:Vec<MotionVote> = 
+        mvdsl::motion_votes
+        .select(MotionVote::cols())
+        .filter(mvdsl::motion.eq(motion_id))
+        .get_results_async(&*pool).await?;
     let mut yes_votes = 0;
     let mut no_votes = 0;
     for vote in &votes {
@@ -383,7 +382,7 @@ async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResul
     let ty_str:String = args.single()?;
     let alias:Option<ItemType> = ita::item_type_aliases
         .inner_join(it::item_types)
-        .select(it::item_types::all_columns())
+        .select(ItemType::cols())
         .filter(ita::alias.eq(&ty_str))
         .get_result_async(&*pool)
         .await
@@ -470,6 +469,7 @@ async fn balances(ctx: &Context, msg: &Message) -> CommandResult {
 
     let pool = Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap());
     let item_types:Vec<ItemType> = it::item_types
+        .select(ItemType::cols())
         .get_results_async(&*pool).await?;
     
     let mut balances = Vec::new();
@@ -500,18 +500,7 @@ async fn balances(ctx: &Context, msg: &Message) -> CommandResult {
     Ok(())
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Queryable)]
-struct ItemType{
-    pub name: String,
-    pub long_name_plural: String,
-    pub long_name_ambiguous: String,
-}
-
-impl ItemType {
-    pub fn db_name(&self) -> &str {
-        self.name.as_str()
-    }
-}
+use crate::models::ItemType;
 
 #[command]
 #[min_args(2)]
@@ -552,7 +541,7 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
         let arg = arg_result.unwrap();
         let alias:Option<ItemType> = ita::item_type_aliases
             .inner_join(it::item_types)
-            .select(it::item_types::all_columns())
+            .select(ItemType::cols())
             .filter(ita::alias.eq(&arg))
             .get_result_async(&*pool)
             .await
@@ -567,7 +556,7 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
             if !ty_str.is_empty() {
                 let alias:Option<ItemType> = ita::item_type_aliases
                     .inner_join(it::item_types)
-                    .select(it::item_types::all_columns())
+                    .select(ItemType::cols())
                     .filter(ita::alias.eq(&ty_str))
                     .get_result_async(&*pool)
                     .await

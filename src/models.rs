@@ -2,6 +2,9 @@ use std::borrow::Cow;
 use chrono::{DateTime,Utc};
 use diesel_derive_enum::DbEnum;
 
+use crate::schema::{motions, motion_votes as mv};
+use crate::view_schema::auction_and_winner as anw;
+
 #[derive(Clone,Debug,Serialize,Queryable)]
 pub struct Motion<'a> {
     pub rowid:i64,
@@ -31,6 +34,26 @@ impl<'a> Motion<'a> {
     #[allow(dead_code)]
     pub fn damm_id(&self) -> String {
         crate::damm::add_to_str(format!("{}",self.rowid))
+    }
+
+    pub fn cols() -> (
+        motions::rowid,
+        motions::bot_message_id,
+        motions::motion_text,
+        motions::motioned_at,
+        motions::last_result_change,
+        motions::is_super,
+        motions::announcement_message_id,
+    ) {
+        (
+            motions::rowid,
+            motions::bot_message_id,
+            motions::motion_text,
+            motions::motioned_at,
+            motions::last_result_change,
+            motions::is_super,
+            motions::announcement_message_id,
+        )
     }
 }
 
@@ -66,6 +89,43 @@ pub struct MotionVote {
     pub amount:i64,
 }
 
+impl MotionVote {
+    pub fn cols() -> (
+        mv::user,
+        mv::direction,
+        mv::amount,
+    ) {
+        (
+            mv::user,
+            mv::direction,
+            mv::amount,
+        )
+    }
+}
+
+
+#[derive(Debug, PartialEq, Eq, Clone, Queryable)]
+pub struct ItemType{
+    pub name: String,
+    pub long_name_plural: String,
+    pub long_name_ambiguous: String,
+}
+
+use crate::schema::item_types;
+
+impl ItemType {
+    pub fn db_name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub fn cols() -> (
+        item_types::name,
+        item_types::long_name_plural,
+        item_types::long_name_ambiguous,
+    ) {
+        item_types::all_columns
+    }
+}
 
 // create type transfer_type as enum (
 //     'motion_create',
@@ -93,4 +153,54 @@ pub enum TransferType {
     AuctionCreate,
     AuctionReserve,
     AuctionRefund,
+    AuctionPayout,
+}
+
+
+#[derive(Debug,Clone,PartialEq,Eq,Queryable)]
+pub struct AuctionWinner {
+    pub auction_id: i64,
+    pub created_at: DateTime<Utc>,
+    pub auctioneer: Option<i64>,
+    pub offer_ty: String,
+    pub offer_amt: i32,
+    pub bid_ty: String,
+    pub bid_min: i32,
+    pub finished: bool,
+    pub last_change: DateTime<Utc>,
+    pub winner_id: Option<i64>,
+    pub winner_bid: Option<i64>,
+}
+
+impl AuctionWinner {
+    pub fn current_min_bid(&self) -> i32 { self.winner_bid.map(|n| (n as i32) + 1).unwrap_or(self.bid_min) }
+    pub fn end_at(&self) -> DateTime<Utc> { self.last_change + *crate::AUCTION_EXPIRATION }
+    pub fn damm(&self) -> String { crate::damm::add_to_str(self.auction_id.to_string()) }
+    pub fn cols() -> (
+        anw::auction_id,
+        anw::created_at,
+        anw::auctioneer,
+        anw::offer_ty,
+        anw::offer_amt,
+        anw::bid_ty,
+        anw::bid_min,
+        anw::finished,
+        anw::last_change,
+        anw::winner_id,
+        anw::winner_bid,
+    ) {
+        (
+            anw::auction_id,
+            anw::created_at,
+            anw::auctioneer,
+            anw::offer_ty,
+            anw::offer_amt,
+            anw::bid_ty,
+            anw::bid_min,
+            anw::finished,
+            anw::last_change,
+            anw::winner_id,
+            anw::winner_bid,
+        )
+    }
 }

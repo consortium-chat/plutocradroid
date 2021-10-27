@@ -4,7 +4,11 @@ alter table single drop column last_task_run;
 
 drop index transfers_current_bid;
 
+drop index auction_single_payout;
+
 drop view balance_history;
+
+drop view auction_and_winner;
 
 alter table transfers
     drop constraint auction_direction_2,

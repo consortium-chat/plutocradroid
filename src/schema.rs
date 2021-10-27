@@ -10,6 +10,7 @@ table! {
         offer_amt -> Int4,
         bid_ty -> Text,
         bid_min -> Int4,
+        finished -> Bool,
     }
 }
 

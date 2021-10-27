@@ -15,3 +15,21 @@ table! {
         transfer_ty -> Text,
     }
 }
+
+table! {
+    auction_and_winner (auction_id) {
+        auction_id -> Int8,
+        created_at -> Timestamptz,
+        auctioneer -> Nullable<Int8>,
+        offer_ty -> Text,
+        offer_amt -> Int4,
+        bid_ty -> Text,
+        bid_min -> Int4,
+        finished -> Bool,
+        last_change -> Timestamptz,
+        transfer_id -> Nullable<Int8>,
+        winner_id -> Nullable<Int8>,
+        winner_bid -> Nullable<Int8>,
+        bid_at -> Nullable<Timestamptz>,
+    }
+}

@@ -7,7 +7,8 @@ create table auctions (
     offer_ty text not null references item_types("name"),
     offer_amt int not null,
     bid_ty text not null references item_types("name"),
-    bid_min int not null
+    bid_min int not null,
+    finished boolean not null default false
 );
 
 create type transfer_type as enum (
@@ -21,7 +22,8 @@ create type transfer_type as enum (
     --new
     'auction_create', --you've offered up some fungibles for bid
     'auction_reserve', --placing a bid, fungibles are held
-    'auction_refund' --someone else outbid you, held fungibles are returned
+    'auction_refund', --someone else outbid you, held fungibles are returned
+    'auction_payout' --you've won the auction, and receive the fungibles offered
 );
 
 --The type of transfer_ty can't be changed while this view exists, so we kill and re-create it.
@@ -47,6 +49,28 @@ alter table transfers
     ),
     add constraint give_has_both_sides check ((NOT (transfer_ty IN ('give', 'admin_give'))) OR (from_user IS NOT NULL and to_user IS NOT NULL)),
     add constraint motion_matches_ty check ((to_motion IS NOT NULL) = transfer_ty IN ('motion_create', 'motion_vote'))
+;
+
+create view auction_and_winner as
+  select
+    a.rowid as auction_id,
+    a.created_at,
+    a.auctioneer,
+    a.offer_ty,
+    a.offer_amt,
+    a.bid_ty,
+    a.bid_min,
+    a.finished,
+    COALESCE(t.happened_at, a.created_at) as last_change,
+    t.rowid as transfer_id,
+    t.from_user as winner_id,
+    t.quantity as winner_bid,
+    t.happened_at as bid_at
+  from
+    auctions a
+  left join lateral
+    (select * from transfers where auction_id = a.rowid and transfer_ty = 'auction_reserve' order by happened_at desc limit 1) t
+  on true
 ;
 
 create view balance_history as
@@ -88,7 +112,10 @@ create view balance_history as
 ;
 
 -- We find the current bid by looking for the most recent auction_reserve transaction for that auction
-create index transfers_current_bid on transfers(auction_id, happened_at) where auction_id is not null and transfer_ty = ('auction_reserve');
+create index transfers_current_bid on transfers(auction_id, happened_at) where auction_id is not null and transfer_ty = 'auction_reserve';
+
+-- An extra safety precaution to make sure an auction can never pay out twice
+create unique index auction_single_payout on transfers(auction_id) where transfer_ty = 'auction_payout';
 
 alter table single add column last_task_run timestamptz not null default '2020-03-26T17:03:34 -0700';
 
