@@ -19,6 +19,7 @@ pub async fn create_auto_auctions(
     use diesel::prelude::*;
     use schema::single::dsl as sdsl;
     use schema::auctions::dsl as adsl; //asymmetric digital subscriber line
+    use schema::thing_ids::dsl as tid;
 
     let now = chrono::Utc::now();
     let maybe_last_auction:Option<chrono::DateTime<chrono::Utc>> = sdsl::single.select(sdsl::last_auto_auction).get_result_async(pool).await?;
@@ -29,7 +30,9 @@ pub async fn create_auto_auctions(
 
         if now > next_auction {
             let auction_id:i64 = pool.transaction(|conn| {
-                let auction_id:i64 = diesel::insert_into(adsl::auctions).values((
+                let auction_id:i64 = diesel::insert_into(tid::thing_ids).default_values().returning(tid::rowid).get_result(conn)?;
+                diesel::insert_into(adsl::auctions).values((
+                    adsl::rowid.eq(auction_id),
                     adsl::created_at.eq(chrono::Utc::now()),
                     adsl::auctioneer.eq(None:Option<i64>),
                     adsl::offer_ty.eq("gen"),
@@ -37,8 +40,7 @@ pub async fn create_auto_auctions(
                     adsl::bid_ty.eq("pc"),
                     adsl::bid_min.eq(1i32),
                 ))
-                .returning(adsl::rowid)
-                .get_result(conn)?;
+                .execute(conn)?;
                 diesel::update(sdsl::single).set(sdsl::last_auto_auction.eq(next_auction)).execute(conn)?;
                 Ok(auction_id)
             }).await?;
