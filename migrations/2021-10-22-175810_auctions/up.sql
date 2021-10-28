@@ -39,13 +39,13 @@ alter table transfers
 
     alter column transfer_ty type transfer_type using transfer_ty::transfer_type,
     add constraint auctions_need_id check (
-        transfer_ty not in ('auction_create', 'auction_reserve', 'auction_refund') or auction_id is not null
+        transfer_ty not in ('auction_create', 'auction_reserve', 'auction_refund', 'auction_payout') or auction_id is not null
     ),
     add constraint auction_direction_1 check (
         transfer_ty not in ('auction_create', 'auction_reserve') or (from_user is not null and to_user is null)
     ),
     add constraint auction_direction_2 check (
-        transfer_ty != ('auction_refund') or (from_user is null and to_user is not null)
+        transfer_ty not in ('auction_refund', 'auction_payout') or (from_user is null and to_user is not null)
     ),
     add constraint give_has_both_sides check ((NOT (transfer_ty IN ('give', 'admin_give'))) OR (from_user IS NOT NULL and to_user IS NOT NULL)),
     add constraint motion_matches_ty check ((to_motion IS NOT NULL) = transfer_ty IN ('motion_create', 'motion_vote'))
