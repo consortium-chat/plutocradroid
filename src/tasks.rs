@@ -120,6 +120,7 @@ pub async fn process_auctions(
                         tdsl::happened_at.eq(chrono::Utc::now()),
                         tdsl::ty.eq(auction.offer_ty.as_str()),
                         tdsl::transfer_ty.eq(TransferType::AuctionPayout),
+                        tdsl::auction_id.eq(auction.rowid),
                     )).execute(conn)?;
 
                     diesel::update(adsl::auctions.filter(adsl::rowid.eq(auction.rowid))).set(adsl::finished.eq(true)).execute(conn)?;
