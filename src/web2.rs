@@ -533,7 +533,7 @@ fn auction_bid(
             return Ok(());
         }
 
-        if data.amount < auction.current_min_bid() {
+        if data.amount < (auction.current_min_bid() as u32) {
             fail_msg = Some("Bid failed: You must bid more than that.");
             return Ok(());
         }
