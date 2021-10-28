@@ -140,10 +140,29 @@ Install dev dependencies (debian/ubuntu)
 
     apt install pkg-config build-essential libssl-dev libpq-dev
 
+Install postgres 10 and create a database
+
+    apt install postgresql-10
+    sudo -u postgres createdb -O $user pluto_dev
+
+Install diesel cli
+
+    cargo install diesel_cli --no-default-features --features postgres
+
+Create env file and edit as necessary
+
+    cp .env.example .env
+    nano .env
+
+Run migrations
+
+    diesel migration run
+
 Build&run project
 
     RUN_BOT=1 cargo run
     RUN_WEB2=1 cargo run
+    RUN_WORKER=1 cargo run
 
 Build in release mode (binary will be in `target/release/plutocradroid`)
 
