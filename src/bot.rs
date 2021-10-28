@@ -762,7 +762,7 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
 
         diesel::insert_into(tdsl::transfers).values((
             tdsl::from_user.eq(msg.author.id.0 as i64),
-            tdsl::from_balance.eq(balance),
+            tdsl::from_balance.eq(balance - (VOTE_BASE_COST as i64)),
             tdsl::ty.eq("pc"),
             tdsl::quantity.eq(VOTE_BASE_COST as i64),
             tdsl::happened_at.eq(chrono::Utc::now()),
