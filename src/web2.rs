@@ -533,6 +533,11 @@ fn auction_bid(
             return Ok(());
         }
 
+        if data.amount < auction.current_min_bid() {
+            fail_msg = Some("Bid failed: You must bid more than that.");
+            return Ok(());
+        }
+
         if Some(deets.id()) == auction.winner_id {
             fail_msg = Some("Bid failed: You cannot increase your own bid.");
             return Ok(());
@@ -557,8 +562,10 @@ fn auction_bid(
         .select(bhdsl::balance)
         .filter(bhdsl::user.eq(id))
         .filter(bhdsl::ty.eq(&auction.bid_ty))
+        .order(bhdsl::happened_at.desc())
+        .limit(1)
         .get_result(&*ctx)
-        .unwrap():i64;
+        .unwrap_or(0):i64;
         let curr_user_balance = get_balance(deets.id());
         if curr_user_balance < data.amount.into():i64 {
             fail_msg = Some("Bid failed: You do not have enough fungibles.");
