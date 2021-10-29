@@ -27,7 +27,7 @@ use std::{env,panic,process};
 #[cfg(feature = "debug")]
 pub const SITE_URL:&str = "https://pluto-test.shelvacu.com";
 #[cfg(not(feature = "debug"))]
-pub const SITE_URL:&str = "https://motions.consortium.chat";
+pub const SITE_URL:&str = "https://mas.consortium.chat";
 
 #[cfg(feature = "debug")]
 lazy_static! {
