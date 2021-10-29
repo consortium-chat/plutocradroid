@@ -450,7 +450,7 @@ async fn version_info(ctx: &Context, msg: &Message) -> CommandResult {
     trace!("version_info");
     msg.reply(&ctx, format!(
         "Plutocradroid {} commit {} built for {} at {}.\nhttps://github.com/consortium-chat/plutocradroid",
-        env!("VERGEN_GIT_SEMVER"),
+        env!("VERGEN_BUILD_SEMVER"),
         env!("VERGEN_GIT_SHA"),
         env!("VERGEN_CARGO_TARGET_TRIPLE"),
         env!("VERGEN_BUILD_TIMESTAMP"),
