@@ -18,6 +18,8 @@ use crate::{schema, view_schema, rocket_diesel};
 use crate::models::{Motion, MotionVote, MotionWithCount, AuctionWinner, TransferType};
 use crate::bot::name_of;
 
+const CSRF_COOKIE_NAME:&str = "csrf_protection_token_v2";
+
 fn generate_state<A: rand::RngCore + rand::CryptoRng>(rng: &mut A) -> Result<String, &'static str> {
     let mut buf = [0; 16]; // 128 bits
     rng.try_fill_bytes(&mut buf).map_err(|_| "Failed to generate random data")?;
@@ -204,15 +206,16 @@ impl <'a, 'r> FromRequest<'a, 'r> for CommonContext<'a> {
 
     fn from_request(request: &'a Request<'r>) -> Outcome<Self, Self::Error> {
         let mut cookies = request.cookies();
-        let csrf_token = match cookies.get("csrf_protection_token") {
+        let csrf_token = match cookies.get(CSRF_COOKIE_NAME) {
             Some(token) => token.value().to_string(),
             None => {
                 let new_token = generate_state(&mut rand::thread_rng()).unwrap();
                 cookies.add(
-                    Cookie::build("csrf_protection_token", new_token.clone())
-                        .same_site(SameSite::Strict)
+                    Cookie::build(CSRF_COOKIE_NAME, new_token.clone())
+                        .same_site(SameSite::Lax)
                         .secure(true)
                         .http_only(true)
+                        .path("/")
                         .finish()
                 );
                 new_token
@@ -488,7 +491,7 @@ fn auction_bid(
         info!("bad id");
         return RocketIsDumb::S(rocket::http::Status::NotFound);
     }
-    if ctx.cookies.get("csrf_protection_token").map(|token| token.value()) != Some(data.csrf.as_str()) {
+    if ctx.cookies.get(CSRF_COOKIE_NAME).map(|token| token.value()) != Some(data.csrf.as_str()) {
         return RocketIsDumb::S(rocket::http::Status::BadRequest);
     }
 
@@ -714,7 +717,7 @@ fn motion_vote(
         info!("bad id");
         return Err(rocket::http::Status::NotFound);
     }
-    if ctx.cookies.get("csrf_protection_token").map(|token| token.value()) != Some(data.csrf.as_str()) {
+    if ctx.cookies.get(CSRF_COOKIE_NAME).map(|token| token.value()) != Some(data.csrf.as_str()) {
         return Err(rocket::http::Status::BadRequest);
     }
     let deets:&Deets;
@@ -1248,7 +1251,8 @@ fn login(
     maybe_referer: Option<Referer>,
     data: LenientForm<CSRFForm>,
 ) -> Result<Redirect, rocket::http::Status> {
-    if cookies.get("csrf_protection_token").map(|token| token.value()) != Some(data.csrf.as_str()) {
+    if cookies.get(CSRF_COOKIE_NAME).map(|token| token.value()) != Some(data.csrf.as_str()) {
+        info!("Bad csrf token");
         return Err(rocket::http::Status::BadRequest);
     }
     if let Some(referer) = maybe_referer {
@@ -1334,7 +1338,7 @@ fn logout(
     mut ctx: CommonContext,
     data: LenientForm<CSRFForm>,
 ) -> Result<Markup, rocket::http::Status> {
-    if ctx.cookies.get("csrf_protection_token").map(|token| token.value()) != Some(data.csrf.as_str()) {
+    if ctx.cookies.get(CSRF_COOKIE_NAME).map(|token| token.value()) != Some(data.csrf.as_str()) {
         return Err(rocket::http::Status::BadRequest);
     }
     let cookies_clone = ctx.cookies.iter().map(Clone::clone).collect():Vec<_>;

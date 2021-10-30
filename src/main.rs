@@ -73,7 +73,7 @@ fn main() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(worker::main());
     } else {
-        eprintln!("Must specify RUN_BOT=1 or RUN_WEB2=1");
+        eprintln!("Must specify RUN_BOT=1, RUN_WEB2=1, or RUN_WORKER=1");
         std::process::exit(100);
     }
 }
