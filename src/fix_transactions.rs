@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use diesel::prelude::*;
-use schema::transfers::dsl as tdsl;
+use rand::Rng;
+use crate::schema::transfers::dsl as tdsl;
 
-#[derive(Debug,Clone,ParitalEq,Queryable)]
+#[derive(Debug,Clone,PartialEq,Queryable)]
 struct Transfer {
     rowid: i64,
     ty: String,
@@ -11,12 +12,6 @@ struct Transfer {
     to_user: Option<i64>,
     from_balance: Option<i64>,
     to_balance: Option<i64>,
-}
-
-#[derive(Debug,Clone)]
-struct BalPair<'a> {
-    user: i64,
-    balance: i64,
 }
 
 impl Transfer {
@@ -39,21 +34,6 @@ impl Transfer {
             tdsl::to_balance
         )
     }
-
-    fn from(&self) -> Option<BalPair> {
-        self.from_user.map(|u| BalPair{user: u, balance: self.from_balance.unwrap()})
-    }
-
-    fn to(&self) -> Option<BalPair> {
-        self.to_user.map(|u| BalPair{user: u, balance: self.to_balance.unwrap()})
-    }
-
-    fn balpairs(&self) -> Vec<BalPair> {
-        let mut res = Vec::new();
-        if let Some(a) = self.from() { res.push(a) }
-        if let Some(a) = self.to() { res.push(a) }
-        res
-    }
 }
 
 pub fn fix_transactions() {
@@ -68,30 +48,30 @@ pub fn fix_transactions() {
         .order_by(tdsl::happened_at.asc())
         .load(&conn)
         .unwrap();
-        let balances = HashMap::new();
+        let mut balances = HashMap::new();
         for orig_transfer in transfers {
             let mut new_transfer = orig_transfer.clone();
-            if let Some(bp) = orig_transfer.from() {
-                let prev_balance = balances.entry((orig_transfer.ty.clone(), bp.user)).or_insert(0i64);
-                let new_balance = prev_balance - orig_transfer.quantity;
+            if let Some(user) = orig_transfer.from_user {
+                let prev_balance = balances.entry((orig_transfer.ty.clone(), user)).or_insert(0i64);
+                let new_balance = *prev_balance - orig_transfer.quantity;
                 if new_balance < 0 { fail = true }
                 new_transfer.from_balance = Some(new_balance);
-                balances.insert((orig_transfer.ty.clone(), bp.user), new_balance);
+                balances.insert((orig_transfer.ty.clone(), user), new_balance);
             }
-            if let Some(bp) = orig_transfer.to() {
-                let prev_balance = balances.entry((orig_transfer.ty.clone(), bp.user)).or_insert(0i64);
-                let new_balance = prev_balance + orig_transfer.quantity;
+            if let Some(user) = orig_transfer.to_user {
+                let prev_balance = balances.entry((orig_transfer.ty.clone(), user)).or_insert(0i64);
+                let new_balance = *prev_balance + orig_transfer.quantity;
                 new_transfer.to_balance = Some(new_balance);
-                balances.insert((orig_transfer.ty.clone(), bp.user), new_balance);
+                balances.insert((orig_transfer.ty.clone(), user), new_balance);
             }
             if new_transfer != orig_transfer {
                 diesel::update(tdsl::transfers.filter(tdsl::rowid.eq(new_transfer.rowid)))
                 .set((
-                    tdsl::from_balance.eq(new_transfer.from_balance()),
-                    tdsl::to_balance.eq(new_transfer.to_balance()),
+                    tdsl::from_balance.eq(new_transfer.from_balance),
+                    tdsl::to_balance.eq(new_transfer.to_balance),
                 ))
-                .execute()
-                .unwrap()
+                .execute(&conn)
+                .unwrap();
             }
         }
 
@@ -106,7 +86,7 @@ pub fn fix_transactions() {
 
     let mut rng = rand::thread_rng();
     let y:f64 = rng.gen();
-    std::thread::sleep(std::time::Duration::from_secs_f64(y * 100));
+    std::thread::sleep(std::time::Duration::from_secs_f64(y * 100.0));
     if fail {
         println!("Failed");
     } else {

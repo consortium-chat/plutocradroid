@@ -21,6 +21,7 @@ mod is_win;
 mod static_responders;
 mod worker;
 mod tasks;
+mod fix_transactions;
 
 use std::{env,panic,process};
 
@@ -72,6 +73,8 @@ fn main() {
     } else if env::var_os("RUN_WORKER") == Some("1".into()) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(worker::main());
+    } else if env::var_os("RUN_FIX_TRANSACTIONS") == Some("1".into()) {
+        fix_transactions::fix_transactions();
     } else {
         eprintln!("Must specify RUN_BOT=1, RUN_WEB2=1, or RUN_WORKER=1");
         std::process::exit(100);
