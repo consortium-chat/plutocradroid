@@ -42,7 +42,7 @@ pub fn fix_transactions() {
         &std::env::var("DATABASE_URL").expect("DATABASE_URL expected")
     ).unwrap();
 
-    conn.transaction::<_, diesel::result::Error, _>(|| {
+    let res = conn.transaction::<_, diesel::result::Error, _>(|| {
         let transfers:Vec<Transfer> = tdsl::transfers
         .select(Transfer::cols())
         .order_by(tdsl::happened_at.asc())
@@ -80,7 +80,13 @@ pub fn fix_transactions() {
         } else {
             Ok(())
         }
-    }).unwrap();
+    });
+
+    match res {
+        Ok(_) => (),
+        Err(diesel::result::Error::RollbackTransaction) => (),
+        e => e.unwrap(),
+    }
 
     // NO KNOWLEDGE ALLOWED
 
