@@ -1,9 +1,50 @@
 use std::borrow::Cow;
+use std::convert::TryInto;
 use chrono::{DateTime,Utc};
+use diesel::deserialize::Queryable;
 use diesel_derive_enum::DbEnum;
 
-use crate::schema::{motions, motion_votes as mv};
-use crate::view_schema::auction_and_winner as anw;
+// Thanks to Chayum Friedman https://stackoverflow.com/a/69877842/1267729
+macro_rules! impl_cols {
+    (@build-tuple
+        ( $($types:path,)* )
+        ( $($ns:ident)::* )
+        ( $col_name:ident, $($rest:tt)* )
+    ) => {
+        impl_cols! { @build-tuple
+            (
+                $($types,)* 
+                $($ns::)* $col_name,
+            )
+            ( $($ns)::* )
+            ( $($rest)* )
+        }
+    };
+    // Empty case
+    (@build-tuple
+        ( $($types:path,)* )
+        ( $($ns:ident)::* )
+        ( )
+    ) => {
+        ( $($types,)* )
+    };
+    (
+        $($ns:ident)::*,
+        $($col_name:ident,)*
+    ) => {
+        pub fn cols() -> impl_cols! { @build-tuple
+            ( )
+            ( $($ns)::* )
+            ( $($col_name,)* )
+        } {
+            impl_cols! { @build-tuple
+                ( )
+                ( $($ns)::* )
+                ( $($col_name,)* )
+            }
+        }
+    };
+}
 
 #[derive(Clone,Debug,Serialize,Queryable)]
 pub struct Motion<'a> {
@@ -36,24 +77,15 @@ impl<'a> Motion<'a> {
         crate::damm::add_to_str(format!("{}",self.rowid))
     }
 
-    pub fn cols() -> (
-        motions::rowid,
-        motions::bot_message_id,
-        motions::motion_text,
-        motions::motioned_at,
-        motions::last_result_change,
-        motions::is_super,
-        motions::announcement_message_id,
-    ) {
-        (
-            motions::rowid,
-            motions::bot_message_id,
-            motions::motion_text,
-            motions::motioned_at,
-            motions::last_result_change,
-            motions::is_super,
-            motions::announcement_message_id,
-        )
+    impl_cols!{
+        crate::schema::motions::dsl,
+        rowid,
+        bot_message_id,
+        motion_text,
+        motioned_at,
+        last_result_change,
+        is_super,
+        announcement_message_id,
     }
 }
 
@@ -90,16 +122,11 @@ pub struct MotionVote {
 }
 
 impl MotionVote {
-    pub fn cols() -> (
-        mv::user,
-        mv::direction,
-        mv::amount,
-    ) {
-        (
-            mv::user,
-            mv::direction,
-            mv::amount,
-        )
+    impl_cols!{
+        crate::schema::motion_votes::dsl,
+        user,
+        direction,
+        amount,
     }
 }
 
@@ -111,19 +138,16 @@ pub struct ItemType{
     pub long_name_ambiguous: String,
 }
 
-use crate::schema::item_types;
-
 impl ItemType {
     pub fn db_name(&self) -> &str {
         self.name.as_str()
     }
 
-    pub fn cols() -> (
-        item_types::name,
-        item_types::long_name_plural,
-        item_types::long_name_ambiguous,
-    ) {
-        item_types::all_columns
+    impl_cols!{
+        crate::schema::item_types,
+        name,
+        long_name_plural,
+        long_name_ambiguous,
     }
 }
 
@@ -176,31 +200,213 @@ impl AuctionWinner {
     pub fn current_min_bid(&self) -> i32 { self.winner_bid.map(|n| (n as i32) + 1).unwrap_or(self.bid_min) }
     pub fn end_at(&self) -> DateTime<Utc> { self.last_change + *crate::AUCTION_EXPIRATION }
     pub fn damm(&self) -> String { crate::damm::add_to_str(self.auction_id.to_string()) }
-    pub fn cols() -> (
-        anw::auction_id,
-        anw::created_at,
-        anw::auctioneer,
-        anw::offer_ty,
-        anw::offer_amt,
-        anw::bid_ty,
-        anw::bid_min,
-        anw::finished,
-        anw::last_change,
-        anw::winner_id,
-        anw::winner_bid,
-    ) {
-        (
-            anw::auction_id,
-            anw::created_at,
-            anw::auctioneer,
-            anw::offer_ty,
-            anw::offer_amt,
-            anw::bid_ty,
-            anw::bid_min,
-            anw::finished,
-            anw::last_change,
-            anw::winner_id,
-            anw::winner_bid,
-        )
+    pub fn auctioneer_name(&self) -> Cow<'static, str> {
+        self.auctioneer.map(|a| crate::bot::name_of(serenity::model::id::UserId::from(a as u64))).unwrap_or("The CONsortium".into())
+    }
+    impl_cols!{
+        crate::view_schema::auction_and_winner,
+        auction_id,
+        created_at,
+        auctioneer,
+        offer_ty,
+        offer_amt,
+        bid_ty,
+        bid_min,
+        finished,
+        last_change,
+        winner_id,
+        winner_bid,
+    }
+}
+
+//     Column    |           Type           | Collation | Nullable |                 Default
+// --------------+--------------------------+-----------+----------+------------------------------------------
+//  rowid        | bigint                   |           | not null | nextval('transfers_rowid_seq'::regclass)
+//  ty           | text                     |           | not null |
+//  from_user    | bigint                   |           |          |
+//  quantity     | bigint                   |           | not null |
+//  to_user      | bigint                   |           |          |
+//  from_balance | bigint                   |           |          |
+//  to_balance   | bigint                   |           |          |
+//  happened_at  | timestamp with time zone |           | not null |
+//  message_id   | bigint                   |           |          |
+//  to_motion    | bigint                   |           |          |
+//  to_votes     | bigint                   |           |          |
+//  comment      | text                     |           |          |
+//  transfer_ty  | transfer_type            |           | not null |
+//  auction_id   | bigint                   |           |          |
+
+#[derive(Debug,Clone,PartialEq,Eq,Queryable)]
+pub struct RawTransfer {
+    pub rowid: i64,
+    pub ty: String,
+    pub from_user: Option<i64>,
+    pub quantity: i64,
+    pub to_user: Option<i64>,
+    pub from_balance: Option<i64>,
+    pub to_balance: Option<i64>,
+    pub happened_at: DateTime<Utc>,
+    pub message_id: Option<i64>,
+    pub to_motion: Option<i64>,
+    pub to_votes: Option<i64>,
+    pub comment: Option<String>,
+    pub transfer_ty: TransferType,
+    pub auction_id: Option<i64>,
+}
+
+impl RawTransfer {
+    impl_cols! {
+        crate::schema::transfers::dsl,
+        rowid,
+        ty,
+        from_user,
+        quantity,
+        to_user,
+        from_balance,
+        to_balance,
+        happened_at,
+        message_id,
+        to_motion,
+        to_votes,
+        comment,
+        transfer_ty,
+        auction_id,
+    }
+
+    fn from(&self) -> Option<UserBalPair> {
+        self.from_user.map(|u| UserBalPair{user: u, bal: self.from_balance.unwrap()})
+    }
+
+    fn to(&self) -> Option<UserBalPair> {
+        self.to_user.map(|u| UserBalPair{user: u, bal: self.to_balance.unwrap()})
+    }
+}
+
+#[allow(dead_code, unused_variables)]
+fn __test_transfer_types() {
+    if false { //build only
+        use diesel::prelude::*;
+        let conn = diesel::PgConnection::establish("abc").unwrap();
+        let data:Vec<RawTransfer> = crate::schema::transfers::dsl::transfers.select(RawTransfer::cols()).get_results(&conn).unwrap();
+        let data:Vec<Transfer> = crate::schema::transfers::dsl::transfers.select(Transfer::cols()).get_results(&conn).unwrap();
+    }
+}
+
+#[derive(Debug,Clone,PartialEq,Eq)]
+pub struct UserBalPair {
+    pub user: i64,
+    pub bal: i64,
+}
+
+impl UserBalPair {
+    pub fn discord_id(&self) -> serenity::model::id::UserId {
+        serenity::model::id::UserId(self.user.try_into().unwrap())
+    }
+}
+
+#[derive(Debug,Clone,PartialEq,Eq)]
+pub enum TransferExtra {
+    Motion{from:UserBalPair, motion_id:i64, votes: i64, created:bool},
+    ThinAir{to:UserBalPair, generated:bool},
+    Give{to:UserBalPair, from:UserBalPair, admin: bool},
+    AuctionCreate{ auction_id:i64, from:UserBalPair},
+    AuctionReserve{auction_id:i64, from:UserBalPair},
+    AuctionRefund{ auction_id:i64, to:UserBalPair},
+    AuctionPayout{ auction_id:i64, to:UserBalPair},
+}
+
+#[derive(Debug,Clone,PartialEq,Eq)]
+pub struct Transfer {
+    pub rowid: i64,
+    pub pc_ty: String,
+    pub happened_at: DateTime<Utc>,
+    pub message_id: Option<i64>,
+    pub quantity: i64,
+    pub comment: Option<String>,
+    pub extra: TransferExtra,
+}
+
+impl Transfer {
+    impl_cols! {
+        crate::schema::transfers::dsl,
+        rowid,
+        ty,
+        from_user,
+        quantity,
+        to_user,
+        from_balance,
+        to_balance,
+        happened_at,
+        message_id,
+        to_motion,
+        to_votes,
+        comment,
+        transfer_ty,
+        auction_id,
+    }
+}
+
+impl<DB: diesel::backend::Backend, ST> Queryable<ST, DB> for Transfer
+where
+    RawTransfer: diesel::deserialize::Queryable<ST, DB>,
+{
+    type Row = <RawTransfer as Queryable<ST,DB>>::Row;
+
+    fn build(row: Self::Row) -> Self {
+        <RawTransfer as Queryable<ST,DB>>::build(row).into()
+    }
+}
+
+impl From<RawTransfer> for Transfer {
+    fn from(r: RawTransfer) -> Self {
+        let rowid = r.rowid;
+        let pc_ty = r.ty.clone();
+        let happened_at = r.happened_at;
+        let message_id = r.message_id;
+        let comment = r.comment.clone();
+        let quantity = r.quantity;
+        let extra = match r.transfer_ty {
+            TransferType::MotionCreate | TransferType::MotionVote => TransferExtra::Motion{
+                from: r.from().unwrap(), 
+                motion_id: r.to_motion.unwrap(),
+                votes: r.to_votes.unwrap(),
+                created: matches!(r.transfer_ty, TransferType::MotionCreate)
+            },
+            TransferType::Generated | TransferType::AdminFabricate | TransferType::CommandFabricate => TransferExtra::ThinAir{
+                to: r.to().unwrap(),
+                generated: matches!(r.transfer_ty, TransferType::Generated),
+            },
+            TransferType::Give | TransferType::AdminGive => TransferExtra::Give{
+                from: r.from().unwrap(),
+                to: r.to().unwrap(),
+                admin: matches!(r.transfer_ty, TransferType::AdminGive),
+            },
+            TransferType::AuctionCreate => TransferExtra::AuctionCreate{
+                auction_id: r.auction_id.unwrap(),
+                from: r.from().unwrap(),
+            },
+            TransferType::AuctionReserve => TransferExtra::AuctionReserve{
+                auction_id: r.auction_id.unwrap(),
+                from: r.from().unwrap(),
+            },
+            TransferType::AuctionRefund => TransferExtra::AuctionRefund{
+                auction_id: r.auction_id.unwrap(),
+                to: r.to().unwrap(),
+            },
+            TransferType::AuctionPayout => TransferExtra::AuctionPayout{
+                auction_id: r.auction_id.unwrap(),
+                to: r.to().unwrap(),
+            },
+        };
+
+        Transfer{
+            rowid,
+            pc_ty,
+            happened_at,
+            message_id,
+            quantity,
+            comment,
+            extra,
+        }
     }
 }

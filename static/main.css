@@ -64,3 +64,28 @@ html {
     padding-left: 2px;
     padding-right: 2px;
 }
+
+.balances {
+    color: transparent;
+    border: 1px solid black;
+}
+
+.balances:hover {
+    color: inherit;
+}
+
+.tabley-table {
+    border: 1px solid black;
+}
+
+.tabley-table > thead > tr > td,
+.tabley-table > tbody > tr > td,
+.tabley-table > tr > td,
+.tabley-table > thead > tr > th,
+.tabley-table > tbody > tr > th,
+.tabley-table > tr > th
+{
+    padding-left: 2px;
+    padding-right: 2px;
+    border: 1px solid black;
+}

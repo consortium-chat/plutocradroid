@@ -1,5 +1,7 @@
 use std::fmt::Display;
 use std::fmt;
+use std::collections::HashMap;
+use std::borrow::Cow;
 use rocket_oauth2::{OAuth2, TokenResponse};
 use rocket::http::{Cookies, Cookie, SameSite};
 use rocket::response::{Responder, Redirect};
@@ -15,7 +17,7 @@ use chrono::{DateTime, Utc, SecondsFormat, TimeZone};
 use serenity::model::prelude::UserId;
 
 use crate::{schema, view_schema, rocket_diesel};
-use crate::models::{Motion, MotionVote, MotionWithCount, AuctionWinner, TransferType};
+use crate::models::{Motion, MotionVote, MotionWithCount, AuctionWinner, TransferType, Transfer, TransferExtra};
 use crate::bot::name_of;
 
 const CSRF_COOKIE_NAME:&str = "csrf_protection_token_v2";
@@ -273,6 +275,16 @@ impl fairing::Fairing for SecureHeaders {
     }
 }
 
+fn show_ts(
+    ts: DateTime<Utc>,
+) -> Markup {
+    html!{
+        time datetime=(ts.to_rfc3339()) {
+            (ts.with_timezone(&chrono_tz::America::Los_Angeles).to_rfc3339_opts(SecondsFormat::Secs, true))
+        }
+    }
+}
+
 #[allow(clippy::branches_sharing_code)]
 fn motion_snippet(
     motion: &MotionWithCount
@@ -301,9 +313,7 @@ fn motion_snippet(
                     abbr title="assuming no other result changes" { "*" }
                     " "
                 }
-                time datetime=(motion.end_at().to_rfc3339()) {
-                    (motion.end_at().with_timezone(&chrono_tz::America::Los_Angeles).to_rfc2822())
-                }
+                (show_ts(motion.end_at()))
             }
         }
         p {
@@ -365,16 +375,12 @@ fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Mar
                 input type="hidden" name="csrf" value=(ctx.csrf_token);
                 input type="submit" name="submit" value="Logout";
             }
-            ul {
+            p { "Hover or tap to show balances:" }
+            ul.balances {
                 @for (name, amount) in balances {
                     li { (amount) (name) }
                 }
             }
-            a href="/" { "Motions" }
-            " | "
-            a href="/my-transactions" { "My Transactions" }
-            " | "
-            a href="/auctions" { "Auctions" }
         } @else {
             form action="/login/discord" method="post" {
                 input type="hidden" name="csrf" value=(ctx.csrf_token);
@@ -383,6 +389,13 @@ fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Mar
                     input type="submit" name="submit" value="Login";
                 }
             }
+        }
+        a href="/" { "Motions" }
+        " | "
+        a href="/auctions" { "Auctions" }
+        @if ctx.deets.is_some() {
+            " | "
+            a href="/my-transactions" { "My Transactions" }
         }
         hr;
         (content)
@@ -428,7 +441,7 @@ fn display_auction(auction:&AuctionWinner) -> Markup {
                 }
             }
             div {
-                (auction.auctioneer.map(|a| name_of(serenity::model::id::UserId::from(a as u64))).unwrap_or("The CONsortium".into()))
+                (auction.auctioneer_name())
                 @if auction.finished {
                     " offered "
                 } @else {
@@ -460,9 +473,7 @@ fn display_auction(auction:&AuctionWinner) -> Markup {
                     }
                     br;
                     "Auction will end at "
-                    time datetime=(auction.end_at().to_rfc3339()) {
-                        (auction.end_at().with_timezone(&chrono_tz::America::Los_Angeles).to_rfc3339_opts(SecondsFormat::Secs, true))
-                    }
+                    (show_ts(auction.end_at()))
                     " if no further bids are placed."
                 }
             }
@@ -629,8 +640,9 @@ fn auction_view(
     }
     use crate::models::AuctionWinner;
     use crate::view_schema::auction_and_winner::dsl as anw;
+    use crate::schema::transfers::dsl as tdsl;
 
-    let maybe_auction = anw::auction_and_winner
+    let maybe_auction:Option<AuctionWinner> = anw::auction_and_winner
     .select(AuctionWinner::cols())
     .filter(anw::auction_id.eq(id))
     .get_result(&*ctx)
@@ -642,6 +654,46 @@ fn auction_view(
         auction = a;
     } else {
         return None;
+    }
+    let transaction_history:Vec<Transfer> = tdsl::transfers
+        .select(Transfer::cols())
+        .filter(tdsl::auction_id.eq(auction.auction_id))
+        .order((tdsl::happened_at.asc(), tdsl::rowid.asc()))
+        .get_results(&*ctx)
+        .unwrap();
+    
+    let mut auction_history:Vec<(DateTime<Utc>, String)> = vec![];
+    auction_history.push((
+        auction.created_at,
+        format!(
+            "Auction created by {}",
+            auction.auctioneer_name(),
+        )
+    ));
+    for t in &transaction_history {
+        match &t.extra {
+            TransferExtra::AuctionCreate{ auction_id: _, from: _} => (), // Already covered above
+            TransferExtra::AuctionReserve{auction_id: _, from} => {
+                auction_history.push((t.happened_at, format!(
+                    "{} bids {} {}",
+                    name_of(from.discord_id()),
+                    t.quantity,
+                    auction.bid_ty,
+                )))
+            },
+            TransferExtra::AuctionRefund{ auction_id: _, to: _} => (), // We don't need to show anything, as this always happens at the same instant as an AuctionReserve
+            TransferExtra::AuctionPayout{ auction_id: _, to} => {
+                auction_history.push(
+                    (t.happened_at, format!(
+                        "{} wins the auction, receiving {} {}.",
+                        name_of(to.discord_id()),
+                        t.quantity,
+                        auction.offer_ty,
+                    ))
+                )
+            },
+            _ => unreachable!(),
+        }
     }
 
     let content = html!{
@@ -658,6 +710,21 @@ fn auction_view(
                 }
             } @else {
                 div { "Log in to bid" }
+            }
+        }
+        h2 { "Auction history" }
+        table.tabley-table {
+            tr {
+                th { "At" }
+                th {}
+            }
+            @for (happened_at, msg) in auction_history {
+                tr {
+                    td {
+                        (show_ts(happened_at))
+                    }
+                    td{ (msg) }
+                }
             }
         }
     };
@@ -767,6 +834,7 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
 
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
+    use schema::transfers::dsl as tdsl;
     let maybe_motion:Option<Motion> = mdsl::motions.select(Motion::cols()).filter(mdsl::rowid.eq(id)).get_result(&*ctx).optional().unwrap();
     
     let motion;
@@ -785,6 +853,16 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
         .iter()
         .map(|v| if v.direction { (v.amount, 0) } else { (0, v.amount) })
         .fold((0,0), |acc, x| (acc.0 + x.0, acc.1 + x.1));
+    let vote_directions:HashMap<i64, bool> = votes
+        .iter()
+        .map(|v| (v.user, v.direction))
+        .collect();
+    let transaction_history:Vec<Transfer> = tdsl::transfers
+        .select(Transfer::cols())
+        .filter(tdsl::to_motion.eq(motion.rowid))
+        .order(tdsl::happened_at.asc())
+        .get_results(&*ctx)
+        .unwrap();
     let motion = MotionWithCount::from_motion(motion, yes_vote_count as u64, no_vote_count as u64);
     let voting_html = if let Some(deets) = ctx.deets.as_ref(){
         if motion.end_at() > Utc::now() {
@@ -822,7 +900,50 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
         html!{ "You must be logged in to vote." }
     };
 
-    Some(page(&mut ctx, format!("Motion #{}", motion.damm_id()), html!{
+    let mut motion_history:Vec<(DateTime<Utc>,Cow<'static, str>,String)> = vec![];
+
+    for t in transaction_history {
+        match t.extra {
+            TransferExtra::Motion{from, motion_id: _, votes, created} => {
+                motion_history.push((
+                    t.happened_at,
+                    name_of(from.discord_id()),
+                    if created {
+                        format!("Created this motion with {} vote(s).", votes)
+                    } else {
+                        format!(
+                            "Voted {} this motion {} time(s).",
+                            if vote_directions[&from.user] {
+                                "in favor"
+                            } else {
+                                "against"
+                            },
+                            (format!("{}",votes))
+                        )
+                    }
+                ))
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    if motion.end_at() < Utc::now() {
+        motion_history.push((
+            motion.end_at(),
+            "".into(),
+            format!(
+                "Motion {}.",
+                if motion.is_win {
+                    "passed"
+                } else {
+                    "failed"
+                }
+            ),
+        ))
+    }
+
+    #[allow(unreachable_code)]
+    let markup:Markup = html!{
         div.motion {
             a href="/" { "Home" }
             (motion_snippet(&motion))
@@ -843,7 +964,24 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
                 }
             }
         }
-    }))
+        h2 { "Motion History" }
+        table.motion-history.tabley-table {
+            tr {
+                th { "Timestamp" }
+                th { "User" }
+                th {}
+            }
+            @for (date, user, msg) in motion_history {
+                tr {
+                    td { (show_ts(date)) }
+                    td { (user) }
+                    td { (msg) }
+                }
+            }
+        }
+    };
+
+    Some(page(&mut ctx, format!("Motion #{}", motion.damm_id()), markup))
 }
 
 #[get("/?<filter>")]
@@ -1107,9 +1245,7 @@ fn my_transactions(
                         @if let TransactionView::Trans(txn) = txn_view {
                             tr.transaction {
                                 td {
-                                    time datetime=(txn.happened_at.to_rfc3339()) {
-                                        (txn.happened_at.with_timezone(&chrono_tz::America::Los_Angeles).to_rfc3339_opts(SecondsFormat::Secs, true))
-                                    }
+                                    (show_ts(txn.happened_at))
                                 }
                                 td {
                                     @match txn.transfer_ty {

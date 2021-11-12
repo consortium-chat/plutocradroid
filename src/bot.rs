@@ -190,9 +190,15 @@ impl EventHandler for Handler {
 pub fn name_of(u:UserId) -> Cow<'static, str> {
     trace!("name_of");
     match u.0 {
-        165858230327574528 => "Shelvacu".into(),
         125003180219170816 => "Colin".into(),
         155438323354042368 => "Ben".into(),
+        165858230327574528 => "Shelvacu".into(),
+        175691653770641409 => "DDR".into(),
+        173650493145350145 => "Sparks".into(),
+        182663630280589312 => "Azure".into(),
+        189620154122895360 => "Leeli".into(),
+        240939050360504320 => "InvisiBrony".into(),
+        373610438560317441 => "Matt".into(),
         n => n.to_string().into(),
     }
 }
