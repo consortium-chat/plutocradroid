@@ -1,0 +1,1 @@
+alter table item_types drop column "position";

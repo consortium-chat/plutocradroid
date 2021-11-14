@@ -20,6 +20,24 @@ use crate::{schema, view_schema, rocket_diesel};
 use crate::models::{Motion, MotionVote, MotionWithCount, AuctionWinner, TransferType, Transfer, TransferExtra};
 use crate::bot::name_of;
 
+trait IntoOption {
+    fn into_option_lazy<T>(self, f: impl FnOnce() -> T) -> Option<T>;
+    fn into_option<T>(self, v: T) -> Option<T>;
+}
+
+impl IntoOption for bool {
+    fn into_option_lazy<T>(self, f: impl FnOnce() -> T) -> Option<T> {
+        if self {
+            Some(f())
+        } else { None }
+    }
+    fn into_option<T>(self, v: T) -> Option<T> {
+        if self {
+            Some(v)
+        } else { None }
+    }
+}
+
 const CSRF_COOKIE_NAME:&str = "csrf_protection_token_v2";
 
 fn generate_state<A: rand::RngCore + rand::CryptoRng>(rng: &mut A) -> Result<String, &'static str> {
@@ -354,50 +372,60 @@ fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Mar
     use schema::item_types::dsl as itdsl;
     use crate::view_schema::balance_history::dsl as bhdsl;
     bare_page(title, html!{
-        @if let Some(deets) = ctx.deets.as_ref() {
-            @let item_types:Vec<String> = itdsl::item_types.select(itdsl::name).get_results(&**ctx).unwrap();
-            @let id:i64 = deets.discord_user.id();
-            @let balances = item_types.iter().map(|name| {
-                (name,bhdsl::balance_history
-                    .select(bhdsl::balance)
-                    .filter(bhdsl::user.eq(id))
-                    .filter(bhdsl::ty.eq(name))
-                    .order(bhdsl::happened_at.desc())
-                    .limit(1)
-                    .get_result(&**ctx)
-                    .optional()
-                    .unwrap() //unwrap Result (query might fail)
-                    .unwrap_or(0) //unwrap Option (row might not exist)
-                )
-            });
-            p { "Welcome, " (deets.discord_user.username) "#" (deets.discord_user.discriminator)}
-            form action="/logout" method="post" {
-                input type="hidden" name="csrf" value=(ctx.csrf_token);
-                input type="submit" name="submit" value="Logout";
-            }
-            p { "Hover or tap to show balances:" }
-            ul.balances {
-                @for (name, amount) in balances {
-                    li { (amount) (name) }
+        header {
+            @if let Some(deets) = ctx.deets.as_ref() {
+                @let item_types:Vec<String> = itdsl::item_types.select(itdsl::name).order(itdsl::position).get_results(&**ctx).unwrap();
+                @let id:i64 = deets.discord_user.id();
+                @let balances = item_types.iter().map(|name| {
+                    (name,bhdsl::balance_history
+                        .select(bhdsl::balance)
+                        .filter(bhdsl::user.eq(id))
+                        .filter(bhdsl::ty.eq(name))
+                        .order(bhdsl::happened_at.desc())
+                        .limit(1)
+                        .get_result(&**ctx)
+                        .optional()
+                        .unwrap() //unwrap Result (query might fail)
+                        .unwrap_or(0) //unwrap Option (row might not exist)
+                    )
+                });
+                p { "Welcome, " (deets.discord_user.username) "#" (deets.discord_user.discriminator)}
+                form action="/logout" method="post" {
+                    input type="hidden" name="csrf" value=(ctx.csrf_token);
+                    input type="submit" name="submit" value="Logout";
+                }
+                details.balances {
+                    summary { "Tap to show balances:" }
+                    ul {
+                        @for (name, amount) in balances {
+                            li { (amount) (name) }
+                        }
+                    }
+                }
+            } @else {
+                form action="/login/discord" method="post" {
+                    input type="hidden" name="csrf" value=(ctx.csrf_token);
+                    p { 
+                        "I don't know who you are. You should "
+                        input type="submit" name="submit" value="Login";
+                    }
                 }
             }
-        } @else {
-            form action="/login/discord" method="post" {
-                input type="hidden" name="csrf" value=(ctx.csrf_token);
-                p { 
-                    "I don't know who you are. You should "
-                    input type="submit" name="submit" value="Login";
+            nav {
+                a href="/" { "Motions" }
+                span role="separator" aria-orientation="vertical" {
+                    " | "
                 }
+                a href="/auctions" { "Auctions" }
+                @if ctx.deets.is_some() {
+                    span role="separator" aria-orientation="vertical" {
+                        " | "
+                    }
+                    a href="/my-transactions" { "My Transactions" }
+                }    
             }
+            hr;
         }
-        a href="/" { "Motions" }
-        " | "
-        a href="/auctions" { "Auctions" }
-        @if ctx.deets.is_some() {
-            " | "
-            a href="/my-transactions" { "My Transactions" }
-        }
-        hr;
         (content)
     })
 }
@@ -414,7 +442,7 @@ fn bare_page(title: impl AsRef<str>, content: Markup) -> Markup {
             body {
                 div.container {
                     (content)
-                    small.build-info {
+                    footer.build-info {
                         "Plutocradroid "
                         (env!("VERGEN_BUILD_SEMVER"))
                         " commit "
@@ -616,7 +644,7 @@ fn auction_bid(
 
     if let Some(fail_msg) = fail_msg {
         RocketIsDumb::M(page(&mut ctx, "Auction bid failed", html!{
-            (fail_msg)
+            main { (fail_msg) }
             br;
             a href={"/auctions/" (damm_id)} { "Return to auction" }
             br;
@@ -697,33 +725,35 @@ fn auction_view(
     }
 
     let content = html!{
-        (display_auction(&auction))
-        @if !auction.finished {
-            @if ctx.deets.is_some() {
-                form action={"/auctions/" (damm_id) "/bid"} method="post" {
-                    input type="hidden" name="csrf" value=(ctx.csrf_token.clone());
-                    "Bid "
-                    input type="number" name="amount" min=(auction.current_min_bid()) value=(auction.current_min_bid());
-                    (auction.bid_ty)
-                    br;
-                    button type="submit" { "Place bid" }
-                }
-            } @else {
-                div { "Log in to bid" }
-            }
-        }
-        h2 { "Auction history" }
-        table.tabley-table {
-            tr {
-                th { "At" }
-                th {}
-            }
-            @for (happened_at, msg) in auction_history {
-                tr {
-                    td {
-                        (show_ts(happened_at))
+        main {
+            (display_auction(&auction))
+            @if !auction.finished {
+                @if ctx.deets.is_some() {
+                    form action={"/auctions/" (damm_id) "/bid"} method="post" {
+                        input type="hidden" name="csrf" value=(ctx.csrf_token.clone());
+                        "Bid "
+                        input type="number" name="amount" min=(auction.current_min_bid()) value=(auction.current_min_bid());
+                        (auction.bid_ty)
+                        br;
+                        button type="submit" { "Place bid" }
                     }
-                    td{ (msg) }
+                } @else {
+                    div { "Log in to bid" }
+                }
+            }
+            h2 { "Auction history" }
+            table.tabley-table {
+                tr {
+                    th { "At" }
+                    th {}
+                }
+                @for (happened_at, msg) in auction_history {
+                    tr {
+                        td {
+                            (show_ts(happened_at))
+                        }
+                        td{ (msg) }
+                    }
                 }
             }
         }
@@ -758,15 +788,16 @@ fn auction_index(
         .unwrap()
     ;
     page(&mut ctx, "Auctions", html!{
-        h3 { "Pending auctions" }
+        h1 { "Auctions" }
+        h2 { "Pending auctions" }
         @for auction in pending_auctions {
-            (display_auction(&auction))
+            article { (display_auction(&auction)) }
         }
 
         hr;
-        h3 { "Finished auctions" }
+        h2 { "Finished auctions" }
         @for auction in finished_auctions {
-            (display_auction(&auction))
+            article { (display_auction(&auction)) }
         }
     })
 }
@@ -815,7 +846,7 @@ fn motion_vote(
     );
 
     Ok(page(&mut ctx, "Vote Complete", html!{
-        (resp)
+        main { (resp) }
         br;
         a href={"/motions/" (damm_id)} { "Back to Motion" }
         br;
@@ -944,38 +975,47 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
 
     #[allow(unreachable_code)]
     let markup:Markup = html!{
-        div.motion {
-            a href="/" { "Home" }
-            (motion_snippet(&motion))
-            hr;
-            (voting_html)
-            hr;
-            @for vote in &votes {
-                div.motion-vote {
-                    h5 { (name_of(UserId::from(vote.user as u64))) }
-                    span {
-                        (vote.amount)
-                        @if vote.direction {
-                            " for"
-                        } @else {
-                            " against"
+        main {
+            h1 { (format!(
+                "Motion #{}",
+                motion.damm_id(),
+            )) }
+            div.motion {
+                (motion_snippet(&motion))
+                hr;
+                (voting_html)
+                hr;
+                dl.motion-votes {
+                    @for vote in &votes {
+                        dt { (name_of(UserId::from(vote.user as u64))) }
+                        dd {
+                            (vote.amount)
+                            @if vote.direction {
+                                " for"
+                            } @else {
+                                " against"
+                            }
                         }
                     }
                 }
             }
-        }
-        h2 { "Motion History" }
-        table.motion-history.tabley-table {
-            tr {
-                th { "Timestamp" }
-                th { "User" }
-                th {}
-            }
-            @for (date, user, msg) in motion_history {
-                tr {
-                    td { (show_ts(date)) }
-                    td { (user) }
-                    td { (msg) }
+            h2 { "Motion History" }
+            table.motion-history.tabley-table {
+                thead {
+                    tr {
+                        th { "Timestamp" }
+                        th { "User" }
+                        th {}
+                    }
+                }
+                tbody {
+                    @for (date, user, msg) in motion_history {
+                        tr {
+                            td { (show_ts(date)) }
+                            td { (user) }
+                            td { (msg) }
+                        }
+                    }
                 }
             }
         }
@@ -1030,37 +1070,30 @@ fn index(mut ctx: CommonContext, filter: MotionListFilter) -> impl Responder<'st
     }:Vec<_>;
 
     page(&mut ctx, "All Motions", html!{
-        form method="get" {
-            div {
-                "Filters:"
-                ul {
-                    @let options = [
-                        ("all", "All", MotionListFilter::All),
-                        ("passed", "Passed", MotionListFilter::Passed),
-                        ("failed", "Failed", MotionListFilter::Failed),
-                        ("finished", "Finished (Passed or Failed)", MotionListFilter::Finished),
-                        ("pending", "Pending", MotionListFilter::Pending),
-                        ("pending_passed", "Pending or Passed", MotionListFilter::PendingPassed),
-                    ];
-                    @for (codename, textname, val) in &options {
-                        li {
-                            label {
-                                input type="radio" name="filter" value=(codename) checked?[filter == *val];
-                                (textname)
-                            }
-                        }
-                    }
+        h1 { "All Motions" }
+        "Filters:"
+        @let options = [
+            ("all", "All", MotionListFilter::All),
+            ("passed", "Passed", MotionListFilter::Passed),
+            ("failed", "Failed", MotionListFilter::Failed),
+            ("finished", "Finished (Passed or Failed)", MotionListFilter::Finished),
+            ("pending", "Pending", MotionListFilter::Pending),
+            ("pending_passed", "Pending or Passed", MotionListFilter::PendingPassed),
+        ];
+        @for (codename, textname, val) in &options {
+            a.filter-button href=[(filter != *val).into_option(if *val == MotionListFilter::default() { "/".to_string() } else { format!("/?filter={}", codename) })] {
+                (textname)
+            }
+        }
+        main {
+            @for motion in &motions {
+                article.motion {
+                    (motion_snippet(motion))
                 }
-                input type="submit" name="submit" value="Go";
             }
-        }
-        @for motion in &motions {
-            div.motion {
-                (motion_snippet(motion))
+            @if motions.is_empty() {
+                p.no-motions { "Nobody here but us chickens!" }
             }
-        }
-        @if motions.is_empty() {
-            p.no-motions { "Nobody here but us chickens!" }
         }
     })
 }
@@ -1146,7 +1179,7 @@ fn my_transactions(
         Generated{amt: i64, bal: i64},
         Trans(Transaction),
     }
-    let fun_tys:Vec<String> = it::item_types.select(it::name).get_results(&*ctx).unwrap();
+    let fun_tys:Vec<String> = it::item_types.select(it::name).order(it::position).get_results(&*ctx).unwrap();
     let fun_ty = if fun_ty_string == "all" {
         FungibleSelection::All
     } else if fun_tys.iter().any(|ft| ft.as_str() == fun_ty_string) {
@@ -1209,170 +1242,166 @@ fn my_transactions(
         (txn_views, hit_limit)
     });
     Ok(page(&mut ctx, "My Transactions", html!{
-        @if let Some((txns, hit_limit)) = txns {
-            h3 { "My Transactions" }
-            form {
-                "Show transactions in"
-                ul {
+        main {
+            h1 { "My Transactions" }
+            @if let Some((txns, hit_limit)) = txns {
+                form style="display: flex; flex-direction: column" {
+                    div { "Show transactions in:" }
                     @for ft in &fun_tys {
-                        li {
-                            label {
-                                input type="radio" name="fun_ty" value=(ft) checked?[fun_ty == FungibleSelection::Specific(ft.clone())];
-                                (ft)
-                            }
-                        }
-                    }
-                    li {
                         label {
-                            input type="radio" name="fun_ty" value="all" checked?[fun_ty == FungibleSelection::All];
-                            "All currencies"
+                            input type="radio" name="fun_ty" value=(ft) checked?[fun_ty == FungibleSelection::Specific(ft.clone())];
+                            (ft)
                         }
                     }
-                }
-                button { "Go" }
-            }
-            table border="1" {
-                thead {
-                    tr {
-                        th { "Timestamp" }
-                        th { "Description" }
-                        th { "Amount" }
-                        th { "Running Total" }
+                    label {
+                        input type="radio" name="fun_ty" value="all" checked?[fun_ty == FungibleSelection::All];
+                        "All currencies"
                     }
+                    button type="submit" { "Go" }
                 }
-                tbody {
-                    @for txn_view in &txns {
-                        @if let TransactionView::Trans(txn) = txn_view {
-                            tr.transaction {
-                                td {
-                                    (show_ts(txn.happened_at))
-                                }
-                                td {
-                                    @match txn.transfer_ty {
-                                        TransferType::Give | TransferType::AdminGive => {
-                                            @if txn.transfer_ty == TransferType::AdminGive {
-                                                "admin "
-                                            }
-                                            @if txn.sign < 0 {
-                                                "transfer to "
-                                            } @else {
-                                                "transfer from "
-                                            }
-                                            "user#\u{200B}"
-                                            (txn.other_party.unwrap())
-                                        },
-                                        TransferType::MotionCreate => {
-                                            @let damm_id = crate::damm::add_to_str(txn.to_motion.unwrap().to_string());
-                                            "1 vote, created "
-                                            a href=(uri!(motion_listing:damm_id = &damm_id)) {
-                                                "motion #"
-                                                (&damm_id)
-                                            }
-                                        },
-                                        TransferType::MotionVote => {
-                                            @let motion_id = &txn.to_motion.unwrap();
-                                            @let votes = &txn.to_votes.unwrap();
-                                            @let damm_id = crate::damm::add_to_str(motion_id.to_string());
-                                            (votes)
-                                            " vote(s) on "
-                                            a href=(uri!(motion_listing:damm_id = &damm_id)) {
-                                                "motion #"
-                                                (&damm_id)
-                                            }
-                                        },
-                                        TransferType::AdminFabricate | TransferType::CommandFabricate => {
-                                            "fabrication"
-                                        },
-                                        TransferType::AuctionCreate => {
-                                            @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
-                                            "Created "
-                                            a href=(uri!(auction_view:damm_id = &damm_id)) {
-                                                "auction #"
-                                                (&damm_id)
-                                            }
-                                        },
-                                        TransferType::AuctionReserve => {
-                                            @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
-                                            "Bid on "
-                                            a href=(uri!(auction_view:damm_id = &damm_id)) {
-                                                "auction #"
-                                                (&damm_id)
-                                            }
-                                        },
-                                        TransferType::AuctionRefund => {
-                                            @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
-                                            "Outbid on "
-                                            a href=(uri!(auction_view:damm_id = &damm_id)) {
-                                                "auction #"
-                                                (&damm_id)
-                                            }
-                                        },
-                                        TransferType::AuctionPayout => {
-                                            @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
-                                            "Won the bid, payout for "
-                                            a href=(uri!(auction_view:damm_id = &damm_id)) {
-                                                "auction #"
-                                                (&damm_id)
-                                            }
-                                        },
-                                        TransferType::Generated => "unreachable",
-                                    }
-                                    // @if txn.transfer_ty == TransferType::Give || txn.transfer_ty == TransferType::AdminGive {
-                                    // } @else if txn.transfer_ty == TransferType::MotionCreate {
-                                    // } @else if let (Some(motion_id), Some(votes)) = (&txn.to_motion, &txn.to_votes) {
-                                    //     assert_eq!(txn.transfer_ty, MotionVote);
-                                    // } @else if txn.transfer_ty == TransferType::AdminFabricate || txn.transfer_ty == TransferType::CommandFabricate {
-                                    //     "fabrication"
-                                    // }
-                                    // " "
-                                    @if let Some(comment) = &txn.comment {
-                                        "“" (comment) "”"
-                                    }
-                                }
-                                td.amount.negative[txn.sign < 0] {
-                                    span.paren { "(" }
-                                    span.amount-inner { (txn.quantity) }
-                                    span.ty { (txn.ty) }
-                                    span.paren { ")" }
-                                }
-                                td.running-total {
-                                    span.amount-inner { (txn.balance) }
-                                    span.ty { (txn.ty) }
-                                }
-                            }
-                        } @else {
-                            @let (amt, bal) = match txn_view { TransactionView::Generated{amt, bal} => (amt, bal), _ => unreachable!() };
-                            tr.transaction.generated {
-                                td {}
-                                td { "generator outputs" }
-                                td.amount {
-                                    span.paren { "(" }
-                                    span.amount-inner { (amt) }
-                                    span.ty { "pc" }
-                                    span.paren { ")" }
-                                }
-                                td.running-total {
-                                    span.amount-inner { (bal) }
-                                    span.ty { "pc" }
-                                }
-                            }
-                        }
-                    }
-                    @if txns.is_empty() {
+                table.tabley-table {
+                    thead {
                         tr {
-                            td colspan="4" {
-                                "Nothing to show."
+                            th { "Timestamp" }
+                            th { "Description" }
+                            th { "Amount" }
+                            th { "Running Total" }
+                        }
+                    }
+                    tbody {
+                        @for txn_view in &txns {
+                            @if let TransactionView::Trans(txn) = txn_view {
+                                tr.transaction {
+                                    td {
+                                        (show_ts(txn.happened_at))
+                                    }
+                                    td {
+                                        @match txn.transfer_ty {
+                                            TransferType::Give | TransferType::AdminGive => {
+                                                @if txn.transfer_ty == TransferType::AdminGive {
+                                                    "admin "
+                                                }
+                                                @if txn.sign < 0 {
+                                                    "transfer to "
+                                                } @else {
+                                                    "transfer from "
+                                                }
+                                                "user#\u{200B}"
+                                                (txn.other_party.unwrap())
+                                            },
+                                            TransferType::MotionCreate => {
+                                                @let damm_id = crate::damm::add_to_str(txn.to_motion.unwrap().to_string());
+                                                "1 vote, created "
+                                                a href=(uri!(motion_listing:damm_id = &damm_id)) {
+                                                    "motion #"
+                                                    (&damm_id)
+                                                }
+                                            },
+                                            TransferType::MotionVote => {
+                                                @let motion_id = &txn.to_motion.unwrap();
+                                                @let votes = &txn.to_votes.unwrap();
+                                                @let damm_id = crate::damm::add_to_str(motion_id.to_string());
+                                                (votes)
+                                                " vote(s) on "
+                                                a href=(uri!(motion_listing:damm_id = &damm_id)) {
+                                                    "motion #"
+                                                    (&damm_id)
+                                                }
+                                            },
+                                            TransferType::AdminFabricate | TransferType::CommandFabricate => {
+                                                "fabrication"
+                                            },
+                                            TransferType::AuctionCreate => {
+                                                @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
+                                                "Created "
+                                                a href=(uri!(auction_view:damm_id = &damm_id)) {
+                                                    "auction #"
+                                                    (&damm_id)
+                                                }
+                                            },
+                                            TransferType::AuctionReserve => {
+                                                @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
+                                                "Bid on "
+                                                a href=(uri!(auction_view:damm_id = &damm_id)) {
+                                                    "auction #"
+                                                    (&damm_id)
+                                                }
+                                            },
+                                            TransferType::AuctionRefund => {
+                                                @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
+                                                "Outbid on "
+                                                a href=(uri!(auction_view:damm_id = &damm_id)) {
+                                                    "auction #"
+                                                    (&damm_id)
+                                                }
+                                            },
+                                            TransferType::AuctionPayout => {
+                                                @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
+                                                "Won the bid, payout for "
+                                                a href=(uri!(auction_view:damm_id = &damm_id)) {
+                                                    "auction #"
+                                                    (&damm_id)
+                                                }
+                                            },
+                                            TransferType::Generated => "unreachable",
+                                        }
+                                        // @if txn.transfer_ty == TransferType::Give || txn.transfer_ty == TransferType::AdminGive {
+                                        // } @else if txn.transfer_ty == TransferType::MotionCreate {
+                                        // } @else if let (Some(motion_id), Some(votes)) = (&txn.to_motion, &txn.to_votes) {
+                                        //     assert_eq!(txn.transfer_ty, MotionVote);
+                                        // } @else if txn.transfer_ty == TransferType::AdminFabricate || txn.transfer_ty == TransferType::CommandFabricate {
+                                        //     "fabrication"
+                                        // }
+                                        // " "
+                                        @if let Some(comment) = &txn.comment {
+                                            " “" (comment) "”"
+                                        }
+                                    }
+                                    td.amount.negative[txn.sign < 0] {
+                                        span.paren { "(" }
+                                        span.amount-inner { (txn.quantity) }
+                                        span.ty { (txn.ty) }
+                                        span.paren { ")" }
+                                    }
+                                    td.running-total {
+                                        span.amount-inner { (txn.balance) }
+                                        span.ty { (txn.ty) }
+                                    }
+                                }
+                            } @else {
+                                @let (amt, bal) = match txn_view { TransactionView::Generated{amt, bal} => (amt, bal), _ => unreachable!() };
+                                tr.transaction.generated {
+                                    td {}
+                                    td { "generator outputs" }
+                                    td.amount {
+                                        span.paren { "(" }
+                                        span.amount-inner { (amt) }
+                                        span.ty { "pc" }
+                                        span.paren { ")" }
+                                    }
+                                    td.running-total {
+                                        span.amount-inner { (bal) }
+                                        span.ty { "pc" }
+                                    }
+                                }
+                            }
+                        }
+                        @if txns.is_empty() {
+                            tr {
+                                td colspan="4" {
+                                    "Nothing to show."
+                                }
                             }
                         }
                     }
                 }
+                @if hit_limit {
+                    @let txn = match txns.iter().rev().find(|t| matches!(t, TransactionView::Trans(_))) { Some(TransactionView::Trans(t)) => t, d => {dbg!(d);unreachable!()} };
+                    a href=(uri!(my_transactions: before_ms = txn.happened_at.timestamp_millis(), fun_ty = fun_ty.as_str())) { "Next" }
+                }
+            } @else {
+                p { "You must be logged in to view your transactions." }
             }
-            @if hit_limit {
-                @let txn = match txns.iter().rev().find(|t| matches!(t, TransactionView::Trans(_))) { Some(TransactionView::Trans(t)) => t, d => {dbg!(d);unreachable!()} };
-                a href=(uri!(my_transactions: before_ms = txn.happened_at.timestamp_millis(), fun_ty = fun_ty.as_str())) { "Next" }
-            }
-        } @else {
-            p { "You must be logged in to view your transactions." }
         }
     }))
 }

@@ -18,7 +18,7 @@ chrono-tz = "*"
 bigdecimal = "=0.1.2"
 maplit = "1.0.2"
 ordinal = "*"
-router = "*"
+#router = "*"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 csv = "1.1"
@@ -28,7 +28,7 @@ log = "0.4.14"
 reqwest = { version = "0.11.4", features = ["blocking","rustls-tls-native-roots"] }
 rand = "0.8.4"
 base64 = "0.13.0"
-maud = { version = "*", features = ["rocket"] }
+maud = { version = "0.23.0", features = ["rocket"] }
 atoi = "0.4.0"
 env_logger = "0.8.4"
 time = "0.1.43"

@@ -476,6 +476,7 @@ async fn balances(ctx: &Context, msg: &Message) -> CommandResult {
     let pool = Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap());
     let item_types:Vec<ItemType> = it::item_types
         .select(ItemType::cols())
+        .order(it::position)
         .get_results_async(&*pool).await?;
     
     let mut balances = Vec::new();

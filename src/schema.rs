@@ -32,6 +32,7 @@ table! {
         name -> Text,
         long_name_plural -> Text,
         long_name_ambiguous -> Text,
+        position -> Int4,
     }
 }
 
