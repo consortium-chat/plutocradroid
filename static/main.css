@@ -74,6 +74,7 @@ html {
 .balances {
     border: 1px solid black;
     padding: 5px;
+    margin-top: 1rem;
 }
 
 .balances summary {
@@ -115,4 +116,31 @@ html {
     background: none;
     border-color: black;
     cursor: pointer;
+}
+
+.tall-form {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+/* Checkboxes *never* look aligned without this */
+input[type=checkbox],
+input[type=radio] {
+    vertical-align: 10%;
+}
+
+.mt-1 {
+    margin-top: 1rem;
+}
+
+.spacer-tall {
+    width: 0;
+    height: 1rem;
+    visibility: hidden;
+}
+.spacer-wide {
+    width: 1rem;
+    height: 0;
+    visibility: hidden;
 }

@@ -5,11 +5,11 @@ use std::borrow::Cow;
 use rocket_oauth2::{OAuth2, TokenResponse};
 use rocket::http::{Cookies, Cookie, SameSite};
 use rocket::response::{Responder, Redirect};
-use rocket::request::{FromRequest,Request,Outcome};
+use rocket::request::{FromRequest,Request,Outcome,FromQuery,Query};
 use rocket::request::LenientForm;
 use rocket::response::content::Content;
 use rocket::response::Response;
-use rocket::http::{ContentType, RawStr, Status};
+use rocket::http::{ContentType, Status};
 use rocket::fairing;
 use maud::{html, Markup};
 use diesel::prelude::*;
@@ -47,37 +47,52 @@ fn generate_state<A: rand::RngCore + rand::CryptoRng>(rng: &mut A) -> Result<Str
 }
 
 #[derive(Debug,Copy,Clone,PartialEq,Eq)]
-enum MotionListFilter {
-    All,
-    Passed,
-    Failed,
-    Finished,
-    Pending,
-    PendingPassed,
+struct MotionFilter {
+    pub pending: bool,
+    pub passed: bool,
+    pub failed: bool,
 }
 
-impl Default for MotionListFilter {
+impl Default for MotionFilter {
     fn default() -> Self {
-        MotionListFilter::All
-    }
-}
-
-impl<'v> rocket::request::FromFormValue<'v> for MotionListFilter {
-    type Error = &'v RawStr;
-    fn from_form_value(v: &'v RawStr) -> Result<Self, Self::Error> {
-        match v.as_str() {
-            "all" => Ok(Self::All),
-            "passed" => Ok(Self::Passed),
-            "failed" => Ok(Self::Failed),
-            "finished" => Ok(Self::Finished),
-            "pending" => Ok(Self::Pending),
-            "pending_passed" => Ok(Self::PendingPassed),
-            _ => Err(v)
+        Self{
+            pending: true,
+            passed: true,
+            failed: true,
         }
     }
+}
 
-    fn default() -> Option<Self> {
-        Some(Default::default())
+impl<'q> FromQuery<'q> for MotionFilter {
+    type Error = !;
+    fn from_query(q: Query<'q>) -> Result<Self, Self::Error> {
+        let mut has_filter = false;
+        let mut pending = false;
+        let mut failed = false;
+        let mut passed = false;
+
+        for item in q {
+            let (k,v) = item.key_value_decoded();
+            if v.as_str() == "y" {
+                match k.as_str() {
+                    "filter" => has_filter = true,
+                    "pending" => pending = true,
+                    "failed" => failed = true,
+                    "passed" => passed = true,
+                    _ => (),
+                }
+            }
+        }
+
+        if has_filter {
+            Ok(MotionFilter{
+                pending,
+                passed,
+                failed,
+            })
+        } else {
+            Ok(Default::default())
+        }
     }
 }
 
@@ -389,7 +404,7 @@ fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Mar
                         .unwrap_or(0) //unwrap Option (row might not exist)
                     )
                 });
-                p { "Welcome, " (deets.discord_user.username) "#" (deets.discord_user.discriminator)}
+                div #logged-in-header { "Welcome, " (deets.discord_user.username) "#" (deets.discord_user.discriminator)}
                 form action="/logout" method="post" {
                     input type="hidden" name="csrf" value=(ctx.csrf_token);
                     input type="submit" name="submit" value="Logout";
@@ -1024,8 +1039,12 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
     Some(page(&mut ctx, format!("Motion #{}", motion.damm_id()), markup))
 }
 
-#[get("/?<filter>")]
-fn index(mut ctx: CommonContext, filter: MotionListFilter) -> impl Responder<'static> {
+#[get("/?<filters..>")]
+fn index(
+    mut ctx: CommonContext,
+    filters: MotionFilter,
+) -> impl Responder<'static> {
+
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
     let bare_motions:Vec<Motion> = mdsl::motions
@@ -1044,46 +1063,39 @@ fn index(mut ctx: CommonContext, filter: MotionListFilter) -> impl Responder<'st
         Ok(votes.map(|bd| bd.to_i64().unwrap()).unwrap_or(0))
     };
 
-    let all_motions = (bare_motions.into_iter().map(|m| {
+    let motions = (bare_motions.into_iter().map(|m| {
         let yes_votes = get_vote_count(m.rowid, true)?;
         let no_votes = get_vote_count(m.rowid, false)?;
         Ok(MotionWithCount::from_motion(m, yes_votes as u64, no_votes as u64))
-    }).collect():Result<Vec<_>,diesel::result::Error>).unwrap().into_iter();
-
-    let motions = match filter {
-        MotionListFilter::All => all_motions.collect(),
-
-        MotionListFilter::Failed =>
-            all_motions.filter(|m| m.announcement_message_id.is_some() && !m.is_win).collect(),
-
-        MotionListFilter::Finished =>
-            all_motions.filter(|m| m.announcement_message_id.is_some()).collect(),
-
-        MotionListFilter::Passed =>
-            all_motions.filter(|m| m.announcement_message_id.is_some() &&  m.is_win).collect(),
-
-        MotionListFilter::Pending =>
-            all_motions.filter(|m| m.announcement_message_id.is_none()).collect(),
-
-        MotionListFilter::PendingPassed =>
-            all_motions.filter(|m| m.announcement_message_id.is_none() ||  m.is_win).collect(),
-    }:Vec<_>;
+    }).collect():Result<Vec<_>,diesel::result::Error>)
+        .unwrap()
+        .into_iter()
+        .filter(|m| {
+            (filters.pending && m.announcement_message_id.is_none()) ||
+            (filters.passed && m.announcement_message_id.is_some() && m.is_win) ||
+            (filters.failed && m.announcement_message_id.is_some() && !m.is_win)
+        })
+        .collect():Vec<_>;
 
     page(&mut ctx, "All Motions", html!{
         h1 { "All Motions" }
         "Filters:"
-        @let options = [
-            ("all", "All", MotionListFilter::All),
-            ("passed", "Passed", MotionListFilter::Passed),
-            ("failed", "Failed", MotionListFilter::Failed),
-            ("finished", "Finished (Passed or Failed)", MotionListFilter::Finished),
-            ("pending", "Pending", MotionListFilter::Pending),
-            ("pending_passed", "Pending or Passed", MotionListFilter::PendingPassed),
-        ];
-        @for (codename, textname, val) in &options {
-            a.filter-button href=[(filter != *val).into_option(if *val == MotionListFilter::default() { "/".to_string() } else { format!("/?filter={}", codename) })] {
-                (textname)
+
+        form.tall-form {
+            input type="hidden" name="filter" value="y";
+            label {
+                input type="checkbox" name="pending" value="y" checked[filters.pending];
+                "Pending"
             }
+            label {
+                input type="checkbox" name="passed" value="y" checked[filters.passed];
+                "Passed"
+            }
+            label {
+                input type="checkbox" name="failed" value="y" checked[filters.failed];
+                "Failed"
+            }
+            button."mt-1" type="submit" { "Go" }
         }
         main {
             @for motion in &motions {
@@ -1245,7 +1257,7 @@ fn my_transactions(
         main {
             h1 { "My Transactions" }
             @if let Some((txns, hit_limit)) = txns {
-                form style="display: flex; flex-direction: column" {
+                form.tall-form {
                     div { "Show transactions in:" }
                     @for ft in &fun_tys {
                         label {
@@ -1257,7 +1269,9 @@ fn my_transactions(
                         input type="radio" name="fun_ty" value="all" checked?[fun_ty == FungibleSelection::All];
                         "All currencies"
                     }
+                    .spacer-tall {}
                     button type="submit" { "Go" }
+                    .spacer-tall {}
                 }
                 table.tabley-table {
                     thead {
