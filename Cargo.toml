@@ -1,6 +1,6 @@
 [package]
 name = "plutocradroid"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Shelvacu <shelvacu@gmail.com>"]
 edition = "2018"
 
