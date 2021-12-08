@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use smallstr::SmallString;
+use std::borrow::Cow;
+use std::convert::TryInto;
 use chrono::{DateTime,Utc};
 use diesel::sql_types::Text;
 use diesel::backend::Backend;
@@ -10,9 +11,11 @@ use crate::schema::transfers::dsl as tdsl;
 use crate::view_schema::balance_history::dsl as bhdsl;
 use crate::models::{UserId,TransferType,AuctionWinner};
 
-// 4 because all the current types of fungibles (pc, gen, sb)
-// are under 4 characters
-type CurrencyIdStr = SmallString<[u8; 4]>;
+// // 4 because all the current types of fungibles (pc, gen, sb)
+// // are under 4 characters
+// type CurrencyIdStr = SmallString<[u8; 4]>;
+
+type CurrencyIdStr = Cow<'static, str>;
 
 #[derive(Debug,Clone,PartialEq,Eq,PartialOrd,Ord,Hash,FromSqlRow,AsExpression)]
 #[sql_type = "Text"]
@@ -24,9 +27,23 @@ impl std::fmt::Display for CurrencyId {
     }
 }
 
+// pub mod currencies {
+//     use super::CurrencyId;
+
+//     lazy_static! {
+//         pub static ref PC :CurrencyId = CurrencyId("pc".into());
+//         pub static ref GEN:CurrencyId = CurrencyId("gen".into());
+//     }
+// }
+
 impl CurrencyId {
+    pub const PC :Self = Self(Cow::Borrowed("pc"));
+    pub const GEN:Self = Self(Cow::Borrowed("gen"));
     pub fn as_str(&self) -> &str {
-        self.0.as_str()
+        match self.0 {
+            Cow::Borrowed(v) => v,
+            Cow::Owned(ref v) => v.as_str(),
+        }
     }
 }
 
@@ -184,6 +201,13 @@ impl TransactionBuilder {
     }
 
     pub fn message_id(
+        self,
+        message_id: serenity::model::id::MessageId,
+    ) -> Self {
+        self.message_id_raw(message_id.0.try_into().unwrap())
+    }
+
+    pub fn message_id_raw(
         mut self,
         message_id: i64,
     ) -> Self {
@@ -246,6 +270,24 @@ impl<'a> TransferHandler<'a> {
         }
 
         Ok(TransferHandler{conn, users_balances})
+    }
+
+    pub fn handle_single(
+        conn: &'a diesel::pg::PgConnection,
+        transfer: TransactionBuilder,
+    ) -> Result<diesel::QueryResult<()>, TransferError> {
+        let mut users = vec![];
+        if let Some(user) = transfer.source { users.push(user); }
+        if let Some(user) = transfer.dest { users.push(user); }
+        let mut handle = match Self::new(
+            conn,
+            users,
+            vec![transfer.currency_ty.clone()],
+        ) {
+            Ok(v) => v,
+            Err(e) => return Ok(Err(e)),
+        };
+        handle.transfer(transfer)
     }
 
     pub fn balance(

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use serenity::framework::standard::CommandResult;
 use serenity::http::CacheHttp;
 use diesel::prelude::*;
-use tokio_diesel::{AsyncRunQueryDsl,AsyncConnection,OptionalExtension};
+use tokio_diesel::{AsyncRunQueryDsl,AsyncConnection};
 use chrono::TimeZone;
 use crate::damm;
 use crate::schema;
@@ -10,7 +10,6 @@ use crate::view_schema;
 use crate::bot;
 use crate::bot::DbPool;
 use crate::is_win::is_win;
-use crate::models::TransferType;
 
 pub async fn create_auto_auctions(
     pool: &Arc<DbPool>,
@@ -64,7 +63,6 @@ pub async fn process_auctions(
     use diesel::prelude::*;
     use view_schema::auction_and_winner::dsl as anw;
     use schema::auctions::dsl as adsl; //asymmetric digital subscriber line
-    use schema::transfers::dsl as tdsl;
 
     let now = chrono::Utc::now();
 
@@ -76,44 +74,31 @@ pub async fn process_auctions(
         .get_results_async(pool).await?;
 
     for auction in auctions_needing_processing {
-        let last_bid:Option<(chrono::DateTime<chrono::Utc>,Option<i64>)> = tdsl::transfers
-            .select((tdsl::happened_at,tdsl::from_user))
-            .filter(tdsl::auction_id.eq(auction.auction_id))
-            .filter(tdsl::transfer_ty.eq(TransferType::AuctionReserve))
-            .order(tdsl::happened_at.desc())
-            .limit(1)
-            .get_result_async(pool)
-            .await
-            .optional()?;
-        let last_action_time = last_bid.map(|(time,_)| time).unwrap_or(auction.created_at);
-        let finishes_at = last_action_time + *crate::AUCTION_EXPIRATION;
+        let finishes_at = auction.last_timer_bump + *crate::AUCTION_EXPIRATION;
         if finishes_at < now {
-            if let Some(user_id) = last_bid.map(|(_,user)| user.unwrap()) {
+            if let Some(user_id) = auction.winner_id {
                 pool.transaction(|conn| {
-                    use view_schema::balance_history::dsl as bh;
+                    let mut handle = crate::transfers::TransferHandler::new(
+                        conn,
+                        vec![user_id],
+                        vec![auction.offer_ty.clone()],
+                    )?;
 
-                    let prev_balance:i64 = view_schema::balance_history::table
-                    .select(bh::balance)
-                    .filter(bh::user.eq(user_id))
-                    .filter(bh::ty.eq(auction.offer_ty.as_str()))
-                    .order(bh::happened_at.desc())
-                    .limit(1)
-                    .for_update()
-                    .get_result(conn)
-                    .optional()?
-                    .unwrap_or(0);
-                    
-                    diesel::insert_into(tdsl::transfers).values((
-                        tdsl::quantity.eq(auction.offer_amt as i64),
-                        tdsl::to_user.eq(user_id),
-                        tdsl::to_balance.eq(prev_balance + (auction.offer_amt as i64)),
-                        tdsl::happened_at.eq(chrono::Utc::now()),
-                        tdsl::ty.eq(auction.offer_ty.as_str()),
-                        tdsl::transfer_ty.eq(TransferType::AuctionPayout),
-                        tdsl::auction_id.eq(auction.auction_id),
-                    )).execute(conn)?;
+                    let t = crate::transfers::TransactionBuilder::new(
+                        auction.offer_amt,
+                        auction.offer_ty.clone(),
+                        now,
+                    ).auction_payout(
+                        user_id,
+                        &auction,
+                    );
 
-                    diesel::update(adsl::auctions.filter(adsl::rowid.eq(auction.auction_id))).set(adsl::finished.eq(true)).execute(conn)?;
+                    handle.transfer(t).unwrap()?;
+                    diesel::update(
+                        adsl::auctions.filter(
+                            adsl::rowid.eq(auction.auction_id)
+                        )
+                    ).set(adsl::finished.eq(true)).execute(conn)?;
             
                     Ok(())
                 }).await?;
@@ -124,7 +109,7 @@ pub async fn process_auctions(
                         "Auction#{0} finished. {2} received {3} {4}. Visit <{1}/auctions/{0}> for more details.",
                         damm::add_to_str(auction.auction_id.to_string()),
                         crate::SITE_URL,
-                        serenity::model::id::UserId::from(user_id as u64).mention(),
+                        user_id.into_serenity().mention(),
                         auction.offer_amt,
                         auction.offer_ty.as_str(),
                     ))
@@ -148,11 +133,11 @@ pub async fn process_auctions(
 pub fn process_generators(
     conn: &diesel::PgConnection
 ) -> Result<bool, diesel::result::Error> {
-    // use schema::gen::dsl as gdsl;
-    use schema::transfers::dsl as tdsl;
     use diesel::prelude::*;
-    use view_schema::balance_history::dsl as bhdsl;
-    use schema::single::dsl as sdsl;
+    use crate::schema::transfers::dsl as tdsl;
+    use crate::schema::single::dsl as sdsl;
+    use crate::models::UserId;
+    use crate::transfers::{CurrencyId,TransactionBuilder,TransferHandler};
     let now = chrono::Utc::now();
     let last_gen:chrono::DateTime<chrono::Utc> = sdsl::single.select(sdsl::last_gen).get_result(&*conn)?;
 
@@ -166,31 +151,23 @@ pub fn process_generators(
     conn.transaction::<_, diesel::result::Error, _>(|| {
         diesel::sql_query("LOCK TABLE transfers IN EXCLUSIVE MODE;").execute(&*conn)?;
 
-        let users:Vec<Option<i64>> = tdsl::transfers.select(tdsl::to_user).distinct().filter(tdsl::ty.eq("gen")).filter(tdsl::to_user.is_not_null()).get_results(&*conn)?;
+        let users:Vec<Option<UserId>> = tdsl::transfers.select(tdsl::to_user).distinct().filter(tdsl::ty.eq(CurrencyId::GEN)).filter(tdsl::to_user.is_not_null()).get_results(&*conn)?;
         for userid_o in &users {
             let userid = userid_o.unwrap();
-            let balance = |ty_str:&'static str| {
-                Ok(bhdsl::balance_history
-                    .select(bhdsl::balance)
-                    .filter(bhdsl::user.eq(userid))
-                    .filter(bhdsl::ty.eq(ty_str))
-                    .filter(bhdsl::happened_at.lt(this_gen)) //This ensures that a late generator run will still give pc to the owner of the gen at the time it was supposed to pay out
-                    .order(bhdsl::happened_at.desc())
-                    .limit(1)
-                    .get_result(&*conn)
-                    .optional()?
-                    .unwrap_or(0)):Result<i64,diesel::result::Error>
-            };
-            let gen_balance = balance("gen")?;
-            let pc_balance = balance("pc")?;
-            diesel::insert_into(tdsl::transfers).values((
-                tdsl::ty.eq("pc"),
-                tdsl::quantity.eq(gen_balance),
-                tdsl::to_user.eq(userid),
-                tdsl::to_balance.eq(pc_balance + gen_balance),
-                tdsl::happened_at.eq(now),
-                tdsl::transfer_ty.eq(TransferType::Generated),
-            )).execute(&*conn)?;
+
+            let mut handle = TransferHandler::new(
+                &*conn,
+                vec![userid],
+                vec![CurrencyId::PC, CurrencyId::GEN],
+            )?;
+
+            let gen_balance = handle.balance(userid, CurrencyId::GEN);
+            let t = TransactionBuilder::new(
+                gen_balance,
+                CurrencyId::PC,
+                now,
+            ).fabricate(userid, true);
+            handle.transfer(t).unwrap()?;
         }
 
         diesel::update(sdsl::single).set(sdsl::last_gen.eq(this_gen)).execute(&*conn)?;

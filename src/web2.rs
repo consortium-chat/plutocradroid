@@ -999,7 +999,7 @@ fn motion_vote(
         &ctx.conn, 
         Some(vote_direction),
         vote_count,
-        deets.discord_user.id(),
+        deets.id(),
         Some(id),
         None,
         None

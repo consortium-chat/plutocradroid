@@ -36,7 +36,7 @@ async-trait = "0.1.50"
 tokio = "1.0.0"
 tokio-diesel = { git = "https://github.com/mehcode/tokio-diesel", rev = "f4af425" }
 futures = "0.3.15"
-smallstr = "0.2"
+phf = { version = "0.10", features = ["macros"] }
 
 [build-dependencies]
 vergen = "5"

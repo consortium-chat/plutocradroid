@@ -75,6 +75,12 @@ impl From<UserId> for serenity::model::id::UserId {
     }
 }
 
+impl From<serenity::model::id::UserId> for UserId {
+    fn from(v: serenity::model::id::UserId) -> Self {
+        Self(v.0)
+    }
+}
+
 impl TryFrom<i64> for UserId {
     type Error = ();
 
@@ -207,14 +213,14 @@ impl MotionVote {
 
 #[derive(Debug, PartialEq, Eq, Clone, Queryable)]
 pub struct ItemType{
-    pub name: CurrencyId,
+    pub id: CurrencyId,
     pub long_name_plural: String,
     pub long_name_ambiguous: String,
 }
 
 impl ItemType {
     pub fn db_name(&self) -> &str {
-        self.name.as_str()
+        self.id.as_str()
     }
 
     impl_cols!{
@@ -268,6 +274,7 @@ pub struct AuctionWinner {
     pub last_change: DateTime<Utc>,
     pub winner_id: Option<UserId>,
     pub winner_bid: Option<i64>,
+    pub winner_bid_at: Option<DateTime<Utc>>,
     pub last_timer_bump: DateTime<Utc>,
     pub max_bid_user: Option<UserId>,
     pub max_bid_amt: Option<i64>,
@@ -311,6 +318,7 @@ impl AuctionWinner {
         last_change,
         winner_id,
         winner_bid,
+        bid_at,
         last_timer_bump,
         max_bid_user,
         max_bid_amt,

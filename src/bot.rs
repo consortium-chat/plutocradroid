@@ -3,13 +3,17 @@ use crate::view_schema;
 use crate::damm;
 
 use std::sync::Arc;
+#[allow(unused_imports)]
+use std::convert::{TryInto, TryFrom};
 
 use tokio_diesel::*;
+
+use chrono::Utc;
 
 use serenity::client::Client;
 use serenity::model::misc::Mentionable;
 use serenity::model::channel::Message;
-use serenity::model::id::UserId;
+use serenity::model::id::UserId as SerenityUserId;
 use serenity::prelude::{EventHandler, Context};
 use serenity::http::CacheHttp;
 use serenity::framework::standard::{
@@ -33,7 +37,8 @@ use tokio::task;
 use async_trait::async_trait;
 
 use crate::is_win::is_win;
-use crate::models::TransferType;
+use crate::models;
+use crate::transfers::{TransferHandler, TransactionBuilder, TransferError, CurrencyId};
 
 pub type DbPool = diesel::r2d2::Pool<diesel::r2d2::ConnectionManager<diesel::PgConnection>>;
 
@@ -92,7 +97,7 @@ pub const MY_ID_INT:u64 = 690112509537288202;
 #[cfg(feature = "debug")]
 pub const MY_ID_INT:u64 = 698996983305863178;
 
-pub const MY_ID:UserId = UserId(MY_ID_INT);
+pub const MY_ID:SerenityUserId = SerenityUserId(MY_ID_INT);
 
 #[async_trait]
 trait FromCommandArgs : Sized {
@@ -100,19 +105,19 @@ trait FromCommandArgs : Sized {
 }
 
 #[async_trait]
-impl FromCommandArgs for UserId {
+impl FromCommandArgs for SerenityUserId {
     async fn from_command_args(ctx: &Context, msg: &Message, arg: &str) -> Result<Self, &'static str> {
         trace!("from_command_args");
         if arg == "." || arg == "self" {
             return Ok(msg.author.id);
         }
         if let Ok(raw_id) = arg.parse():Result<u64,_> {
-            return Ok(UserId::from(raw_id));
+            return Ok(SerenityUserId::from(raw_id));
         }
 
         if let Some(ma) = USER_PING_RE.captures(arg) {
             if let Ok(raw_id) = ma.get(1).unwrap().as_str().parse():Result<u64,_> {
-                return Ok(UserId::from(raw_id));
+                return Ok(SerenityUserId::from(raw_id));
             }
         }
 
@@ -175,7 +180,7 @@ impl EventHandler for Handler {
                         pool,
                         vote_direction,
                         vote_count as i64,
-                        user_id.0 as i64,
+                        user_id.into(),
                         None,
                         Some(message_id.0 as i64),
                         None,
@@ -187,19 +192,24 @@ impl EventHandler for Handler {
     }
 }
 
-pub fn name_of(u:UserId) -> Cow<'static, str> {
+pub static KNOWN_NAMES: phf::Map<u64, &'static str> = phf::phf_map! {
+    125003180219170816u64 => "Colin",
+    155438323354042368u64 => "Ben",
+    165858230327574528u64 => "Shelvacu",
+    175691653770641409u64 => "DDR",
+    173650493145350145u64 => "Sparks",
+    182663630280589312u64 => "Azure",
+    189620154122895360u64 => "Leeli",
+    240939050360504320u64 => "InvisiBrony",
+    373610438560317441u64 => "Matt",
+};
+
+pub fn name_of(u:SerenityUserId) -> Cow<'static, str> {
     trace!("name_of");
-    match u.0 {
-        125003180219170816 => "Colin".into(),
-        155438323354042368 => "Ben".into(),
-        165858230327574528 => "Shelvacu".into(),
-        175691653770641409 => "DDR".into(),
-        173650493145350145 => "Sparks".into(),
-        182663630280589312 => "Azure".into(),
-        189620154122895360 => "Leeli".into(),
-        240939050360504320 => "InvisiBrony".into(),
-        373610438560317441 => "Matt".into(),
-        n => n.to_string().into(),
+    if let Some(name) = KNOWN_NAMES.get(&u.0) {
+        (*name).into()
+    } else {
+        u.0.to_string().into()
     }
 }
 
@@ -378,6 +388,7 @@ async fn ping(ctx: &Context, msg: &Message) -> CommandResult {
 #[command]
 #[num_args(2)]
 async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
+    let now = Utc::now();
     trace!("fabricate");
     use diesel::prelude::*;
     use schema::item_types::dsl as it;
@@ -402,39 +413,26 @@ async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResul
     if how_many <= 0 {
         return Err("fuck".into());
     }
-    let user:UserId;
+    let user:SerenityUserId;
     if args.remaining() > 0 {
         let user_str = args.single()?:String;
-        user = UserId::from_command_args(ctx, msg, &user_str).await?;
+        user = SerenityUserId::from_command_args(ctx, msg, &user_str).await?;
     }else{
         user = msg.author.id;
     }
 
     pool.transaction(|txn| {
-        use view_schema::balance_history::dsl as bh;
-        use schema::transfers::dsl as tdsl;
-        let prev_balance:i64 = view_schema::balance_history::table
-          .select(bh::balance)
-          .filter(bh::user.eq(user.0 as i64))
-          .filter(bh::ty.eq(ty.db_name()))
-          .order(bh::happened_at.desc())
-          .limit(1)
-          .for_update()
-          .get_result(&*txn)
-          .optional()?
-          .unwrap_or(0);
-        
-        diesel::insert_into(tdsl::transfers).values((
-            tdsl::quantity.eq(how_many),
-            tdsl::to_user.eq(msg.author.id.0 as i64),
-            tdsl::to_balance.eq(prev_balance + how_many),
-            tdsl::happened_at.eq(chrono::Utc::now()),
-            tdsl::message_id.eq(msg.id.0 as i64),
-            tdsl::ty.eq(ty.db_name()),
-            tdsl::transfer_ty.eq(TransferType::CommandFabricate),
-        )).execute(&*txn)?;
-
-        Ok(())
+        let mut handle = TransferHandler::new(
+            txn,
+            vec![user.into()],
+            vec![ty.id.clone()]
+        )?;
+        let t = TransactionBuilder::new(
+            how_many,
+            ty.id.clone(),
+            now,
+        ).fabricate(user.into(), false).message_id(msg.id);
+        handle.transfer(t).unwrap()
     }).await?;
 
     msg.reply(&ctx, "Fabricated.").await?;
@@ -528,10 +526,11 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
     use diesel::prelude::*;
     use schema::item_types::dsl as it;
     use schema::item_type_aliases::dsl as ita;
+    let now = Utc::now();
     let pool = Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap());
 
     let user_str:String = args.single()?;
-    let user = UserId::from_command_args( ctx, msg, &user_str ).await?;
+    let user = SerenityUserId::from_command_args( ctx, msg, &user_str ).await?;
     let user_in_guild = if let Some(guild_id) = msg.guild_id {
         match guild_id.member(ctx,user).await {
             Ok(_) => true,
@@ -543,7 +542,7 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
         return Err("User not found".into());
     }
     let mut maybe_ty:Option<ItemType> = None;
-    let mut amount:Option<u64> = None;
+    let mut amount:Option<i64> = None;
     for arg_result in args.iter::<String>(){
         let arg = arg_result.unwrap();
         let alias:Option<ItemType> = ita::item_type_aliases
@@ -575,13 +574,15 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
                 }
             }
 
-            match count_str.parse():Result<u64,_> {
+            match count_str.parse():Result<i64,_> {
                 Err(e) => return Err(format!("Bad count {:?}", e).into()),
+                Ok(val) if val < 0 => return Err("No negatives >:(".into()),
                 Ok(val) => amount = Some(val),
             }
         }else{
-            match arg.parse():Result<u64, _> {
+            match arg.parse():Result<i64, _> {
                 Err(e) => return Err(format!("Bad count {:?}", e).into()),
+                Ok(val) if val < 0 => return Err("No negatives >:(".into()),
                 Ok(val) => amount = Some(val),
             }
         }
@@ -592,76 +593,26 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
         let mut fail:Option<&'static str> = None;
         let ty_copy = ty.clone();
         pool.transaction(|txn| {
-
-            use view_schema::balance_history::dsl as bh;
-            let mut ids = [msg.author.id.0, user.0];
-            let mut author = 0;
-            let mut dest = 1;
-            if ids[0] > ids[1] {
-                ids = [ids[1],ids[0]];
-                author = 1;
-                dest = 0;
+            let t = TransactionBuilder::new(
+                amount,
+                ty_copy.id,
+                now,
+            ).give(
+                msg.author.id.into(),
+                user.into(),
+                false,
+            ).message_id(msg.id);
+            match TransferHandler::handle_single(txn, t) {
+                Err(TransferError::NotEnough) => {
+                    fail = Some("Insufficient balance.");
+                    return Ok(());
+                },
+                Err(TransferError::Overflow) => {
+                    fail = Some("Overflow.");
+                    return Ok(());
+                },
+                Ok(v) => v?,
             }
-            let balances:Vec<i64> = ids.iter().map::<Result<i64,diesel::result::Error>,_>(|id| {
-                Ok(
-                    bh::balance_history
-                        .select(bh::balance)
-                        .filter(bh::user.eq(*id as i64))
-                        .filter(bh::ty.eq(ty_copy.db_name()))
-                        .order(bh::happened_at.desc())
-                        .limit(1)
-                        .for_update()
-                        .get_result(&*txn)
-                        .optional()?
-                        .unwrap_or(0i64)
-                )
-            }).collect::<Result<_,_>>()?;
-            let sender_balance = balances[author];
-            let dest_balance = balances[dest];
-            if sender_balance < amount as i64 {
-                fail = Some("Insufficient balance.");
-                return Ok(());
-            }
-
-            use schema::transfers;
-            #[derive(Insertable, Debug)]
-            #[table_name = "transfers"]
-            struct Transfer {
-                from_user:i64,
-                quantity:i64,
-                to_user:i64,
-                from_balance:i64,
-                to_balance:i64,
-                happened_at:chrono::DateTime<chrono::Utc>,
-                message_id:i64,
-                ty:String,
-                transfer_ty:TransferType,
-            }
-
-            let from_balance;
-            let to_balance;
-            if msg.author.id == user {
-                from_balance = sender_balance;
-                to_balance = sender_balance;
-            }else{
-                from_balance = sender_balance - amount as i64;
-                to_balance = dest_balance + amount as i64;
-            }
-
-            let t = Transfer {
-                from_user: msg.author.id.0 as i64,
-                quantity: amount as i64,
-                to_user: user.0 as i64,
-                from_balance,
-                to_balance,
-                happened_at: chrono::Utc::now(),
-                message_id: msg.id.0 as i64,
-                ty: ty.db_name().into(),
-                transfer_ty: TransferType::Give,
-            };
-
-            diesel::insert_into(schema::transfers::table).values(&t).execute(&*txn)?;
-
             Ok(())
         }).await?;
         if let Some(fail_msg) = fail {
@@ -698,7 +649,6 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
     use diesel::prelude::*;
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
-    use schema::transfers::dsl as tdsl;
     use view_schema::balance_history::dsl as bhdsl;
     let motion_text = args.rest();
     //let mut motion_message_outer:Option<_> = None;
@@ -735,17 +685,15 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
     }).await?;
 
     pool.transaction(|txn| {
-        let balance:i64 = bhdsl::balance_history
-            .select(bhdsl::balance)
-            .filter(bhdsl::ty.eq("pc"))
-            .filter(bhdsl::user.eq(msg.author.id.0 as i64))
-            .order(bhdsl::happened_at.desc())
-            .limit(1)
-            .for_update()
-            .get_result(&*txn)?;
+        let mut handle = TransferHandler::new(
+            txn,
+            vec![msg.author.id.into()],
+            vec![CurrencyId::PC]
+        )?;
+        let balance = handle.balance(msg.author.id.into(), CurrencyId::PC);
         
         if balance < VOTE_BASE_COST as i64 {
-            //msg.author is an asshat or was part of an incredibly rare event
+            //msg.author is an asshat attempting to exploit race conditions or was part of an incredibly rare event
             return Ok(());
         }
 
@@ -767,17 +715,16 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
             mvdsl::amount.eq(1)
         )).execute(&*txn)?;
 
-        diesel::insert_into(tdsl::transfers).values((
-            tdsl::from_user.eq(msg.author.id.0 as i64),
-            tdsl::from_balance.eq(balance - (VOTE_BASE_COST as i64)),
-            tdsl::ty.eq("pc"),
-            tdsl::quantity.eq(VOTE_BASE_COST as i64),
-            tdsl::happened_at.eq(chrono::Utc::now()),
-            tdsl::message_id.eq(msg.id.0 as i64),
-            tdsl::to_motion.eq(motion_id),
-            tdsl::to_votes.eq(1),
-            tdsl::transfer_ty.eq(TransferType::MotionCreate),
-        )).execute(&*txn)?;
+        let t = TransactionBuilder::new(
+            VOTE_BASE_COST as i64,
+            CurrencyId::PC,
+            now,
+        ).motion(msg.author.id.into(), motion_id, 1, true).message_id(msg.id);
+
+        match handle.transfer(t) {
+            Err(_) => unreachable!(),
+            Ok(v) => v?,
+        }
 
         Ok(())
     }).await?;
@@ -904,7 +851,7 @@ async fn vote(ctx:&Context, msg:&Message, mut args:Args) -> CommandResult {
             pool,
             vote_direction,
             vote_count,
-            msg.author.id.0 as i64,
+            msg.author.id.into(),
             Some(motion_id),
             None,
             Some(msg.id.0 as i64),
@@ -923,7 +870,7 @@ pub async fn vote_common_async(
     pool: Arc<DbPool>,
     vote_direction:Option<bool>,
     vote_count:i64,
-    user_id:i64,
+    user_id:models::UserId,
     motion_id:Option<i64>,
     message_id:Option<i64>,
     command_message_id:Option<i64>,
@@ -949,12 +896,13 @@ pub fn vote_common(
     conn: &diesel::PgConnection,
     vote_direction:Option<bool>,
     vote_count:i64,
-    user_id:i64,
+    user_id:models::UserId,
     motion_id:Option<i64>,
     message_id:Option<i64>,
     command_message_id:Option<i64>,
 ) -> Cow<'static, str> {
     trace!("vote_common");
+    let now = chrono::Utc::now();
     let mut fail:Option<&'static str> = None;
     let mut outer_cost:Option<i64> = None;
     let mut outer_motion_id:Option<i64> = None;
@@ -963,10 +911,8 @@ pub fn vote_common(
     let mut outer_direction:Option<bool> = None;
     let txn_res = conn.transaction::<_, diesel::result::Error, _>(|| {
         use diesel::prelude::*;
-        use schema::motions::dsl as mdsl;
-        use schema::motion_votes::dsl as mvdsl;
-        use view_schema::balance_history::dsl as bhdsl;
-        use schema::transfers::dsl as tdsl;
+        use crate::schema::motions::dsl as mdsl;
+        use crate::schema::motion_votes::dsl as mvdsl;
 
         let res:Option<(i64, bool, bool, i64)> = mdsl::motions
         .filter(mdsl::rowid.eq(motion_id.unwrap_or(-1)).or(mdsl::bot_message_id.eq(message_id.unwrap_or(-1))))
@@ -982,6 +928,12 @@ pub fn vote_common(
         .get_result(conn)
         .optional()?;
         //dbg!(&res);
+
+        let mut handle = TransferHandler::new(
+            conn,
+            vec![user_id],
+            vec![CurrencyId::PC],
+        )?;
 
         if let Some((motion_id, not_announced, is_super, _motion_message_id)) = res {
             outer_motion_id = Some(motion_id);
@@ -1067,37 +1019,30 @@ pub fn vote_common(
                 //dbg!(&cost);
                 outer_cost = Some(cost);
 
-                let balance:i64 = bhdsl::balance_history
-                .select(bhdsl::balance)
-                .filter(bhdsl::user.eq(user_id))
-                .filter(bhdsl::ty.eq("pc"))
-                .order(bhdsl::happened_at.desc())
-                .limit(1)
-                .for_update()
-                .get_result(&*conn)
-                .optional()?
-                .unwrap_or(0);
-                //dbg!(&balance);
-
-                if cost > balance {
-                    fail = Some("Not enough capital.");
-                    return Err(diesel::result::Error::RollbackTransaction);
+                let t = TransactionBuilder::new(
+                    cost,
+                    CurrencyId::PC,
+                    now,
+                ).motion(
+                    user_id,
+                    motion_id,
+                    vote_count,
+                    false,
+                );
+                let t = if let Some(message_id) = command_message_id {
+                    t.message_id_raw(message_id)
+                } else { t };
+                match handle.transfer(t) {
+                    Err(TransferError::Overflow) => {
+                        fail = Some("Integer overflow, no way you have that much pc");
+                        return Err(diesel::result::Error::RollbackTransaction);
+                    },
+                    Err(TransferError::NotEnough) => {
+                        fail = Some("Not enough capital.");
+                        return Err(diesel::result::Error::RollbackTransaction);
+                    },
+                    Ok(v) => v?,
                 }
-
-                let now = chrono::Utc::now();
-
-                diesel::insert_into(tdsl::transfers).values((
-                    tdsl::ty.eq("pc"),
-                    tdsl::from_user.eq(user_id),
-                    tdsl::quantity.eq(cost),
-                    tdsl::from_balance.eq(balance - cost),
-                    tdsl::happened_at.eq(now),
-                    tdsl::message_id.eq(command_message_id),
-                    tdsl::to_motion.eq(motion_id),
-                    tdsl::to_votes.eq(vote_count),
-                    tdsl::transfer_ty.eq(TransferType::MotionVote),
-                )).execute(&*conn)?;
-                //dbg!();
 
                 use bigdecimal::{BigDecimal,ToPrimitive};
                 let get_vote_count = |dir:bool| -> Result<i64, diesel::result::Error> {
