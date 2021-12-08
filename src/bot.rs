@@ -344,7 +344,7 @@ pub async fn update_motion_message(
                 e.field("Votes", format!("**against {}**/{} for", no_votes, yes_votes), false);
             }
             for vote in &votes[0..std::cmp::min(votes.len(),21)] {
-                e.field(name_of(UserId::from(vote.user as u64)), format!("{} {}", vote.amount, if vote.direction {"for"} else {"against"}), true);
+                e.field(name_of(vote.user.into_serenity()), format!("{} {}", vote.amount, if vote.direction {"for"} else {"against"}), true);
             }
 
             if votes.len() > 21 {

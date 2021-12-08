@@ -7,10 +7,13 @@ table! {
         created_at -> Timestamptz,
         auctioneer -> Nullable<Int8>,
         offer_ty -> Text,
-        offer_amt -> Int4,
+        offer_amt -> Int8,
         bid_ty -> Text,
-        bid_min -> Int4,
+        bid_min -> Int8,
         finished -> Bool,
+        max_bid_user -> Nullable<Int8>,
+        max_bid_amt -> Nullable<Int8>,
+        last_timer_bump -> Timestamptz,
     }
 }
 

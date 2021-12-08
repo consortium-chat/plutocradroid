@@ -18,7 +18,6 @@ chrono-tz = "*"
 bigdecimal = "=0.1.2"
 maplit = "1.0.2"
 ordinal = "*"
-#router = "*"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 csv = "1.1"
@@ -37,6 +36,7 @@ async-trait = "0.1.50"
 tokio = "1.0.0"
 tokio-diesel = { git = "https://github.com/mehcode/tokio-diesel", rev = "f4af425" }
 futures = "0.3.15"
+smallstr = "0.2"
 
 [build-dependencies]
 vergen = "5"

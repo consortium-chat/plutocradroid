@@ -1,8 +1,13 @@
 use std::borrow::Cow;
-use std::convert::TryInto;
+use std::convert::{TryFrom,TryInto};
 use chrono::{DateTime,Utc};
+use diesel::backend::Backend;
 use diesel::deserialize::Queryable;
+use diesel::sql_types::Int8;
+use diesel::deserialize;
+use diesel::serialize;
 use diesel_derive_enum::DbEnum;
+use crate::transfers::CurrencyId;
 
 // Thanks to Chayum Friedman https://stackoverflow.com/a/69877842/1267729
 macro_rules! impl_cols {
@@ -44,6 +49,76 @@ macro_rules! impl_cols {
             }
         }
     };
+}
+
+#[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,FromSqlRow,AsExpression)]
+#[sql_type = "Int8"]
+pub struct UserId(u64);
+
+impl UserId {
+    pub fn into_i64(self) -> i64 {
+        self.0.try_into().unwrap()
+    }
+
+    pub fn into_u64(self) -> u64 {
+        self.0
+    }
+
+    pub fn into_serenity(self) -> serenity::model::id::UserId {
+        serenity::model::id::UserId(self.0)
+    }
+}
+
+impl From<UserId> for serenity::model::id::UserId {
+    fn from(v: UserId) -> serenity::model::id::UserId {
+        v.into_serenity()
+    }
+}
+
+impl TryFrom<i64> for UserId {
+    type Error = ();
+
+    fn try_from(from: i64) -> Result<Self, Self::Error> {
+        match from {
+            v @ 0.. => Ok(UserId(v as u64)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<u64> for UserId {
+    type Error = ();
+
+    fn try_from(from: u64) -> Result<Self, Self::Error> {
+        match from {
+            v @ 0..=9223372036854775807 => Ok(UserId(v)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl deserialize::FromSql<Int8, diesel::pg::Pg> for UserId
+where
+    i64: deserialize::FromSql<Int8, diesel::pg::Pg>,
+{
+    fn from_sql(bytes: Option<&<diesel::pg::Pg as Backend>::RawValue>) -> deserialize::Result<Self> {
+        match <i64 as deserialize::FromSql<Int8, diesel::pg::Pg>>::from_sql(bytes)? {
+            v @ 0.. => Ok(UserId(u64::try_from(v).unwrap())),
+            v => Err(format!("Invalid user id {}", v).into()),
+        }
+    }
+}
+
+impl serialize::ToSql<Int8, diesel::pg::Pg> for UserId
+where
+    i64: serialize::ToSql<Int8, diesel::pg::Pg>,
+{
+    fn to_sql<W: std::io::Write>(
+        &self,
+        out: &mut serialize::Output<W, diesel::pg::Pg>
+    ) -> serialize::Result {
+        <i64 as serialize::ToSql<Int8, diesel::pg::Pg>>::to_sql(&self.into_i64(), out)
+    }
 }
 
 #[derive(Clone,Debug,Serialize,Queryable)]
@@ -114,9 +189,9 @@ impl<'a> MotionWithCount<'a>{
     }
 }
 
-#[derive(Copy,Clone,Debug,Serialize,Queryable)]
+#[derive(Copy,Clone,Debug,Queryable)]
 pub struct MotionVote {
-    pub user:i64,
+    pub user:UserId,
     pub direction:bool,
     pub amount:i64,
 }
@@ -130,10 +205,9 @@ impl MotionVote {
     }
 }
 
-
 #[derive(Debug, PartialEq, Eq, Clone, Queryable)]
 pub struct ItemType{
-    pub name: String,
+    pub name: CurrencyId,
     pub long_name_plural: String,
     pub long_name_ambiguous: String,
 }
@@ -186,22 +260,43 @@ pub struct AuctionWinner {
     pub auction_id: i64,
     pub created_at: DateTime<Utc>,
     pub auctioneer: Option<i64>,
-    pub offer_ty: String,
-    pub offer_amt: i32,
-    pub bid_ty: String,
-    pub bid_min: i32,
+    pub offer_ty: CurrencyId,
+    pub offer_amt: i64,
+    pub bid_ty: CurrencyId,
+    pub bid_min: i64,
     pub finished: bool,
     pub last_change: DateTime<Utc>,
-    pub winner_id: Option<i64>,
+    pub winner_id: Option<UserId>,
     pub winner_bid: Option<i64>,
+    pub last_timer_bump: DateTime<Utc>,
+    pub max_bid_user: Option<UserId>,
+    pub max_bid_amt: Option<i64>,
+}
+
+pub struct MaxBid {
+    pub user: UserId,
+    pub currency: CurrencyId,
+    pub amount: i64,
 }
 
 impl AuctionWinner {
-    pub fn current_min_bid(&self) -> i32 { self.winner_bid.map(|n| (n as i32) + 1).unwrap_or(self.bid_min) }
-    pub fn end_at(&self) -> DateTime<Utc> { self.last_change + *crate::AUCTION_EXPIRATION }
+    pub fn current_min_bid(&self) -> i64 { self.winner_bid.map(|n| n.checked_add(1).unwrap()).unwrap_or(self.bid_min) }
+    pub fn end_at(&self) -> DateTime<Utc> { self.last_timer_bump + *crate::AUCTION_EXPIRATION }
     pub fn damm(&self) -> String { crate::damm::add_to_str(self.auction_id.to_string()) }
     pub fn auctioneer_name(&self) -> Cow<'static, str> {
         self.auctioneer.map(|a| crate::bot::name_of(serenity::model::id::UserId::from(a as u64))).unwrap_or("The CONsortium".into())
+    }
+    pub fn winner(&self) -> Option<(UserId, i64)> {
+        self.winner_id.map(|winner| (winner, self.winner_bid.unwrap()))
+    }
+    pub fn max_bid(&self) -> Option<MaxBid> {
+        self.max_bid_amt.map(|amount| {
+            MaxBid{
+                user: self.max_bid_user.unwrap(),
+                currency: self.bid_ty.clone(),
+                amount
+            }
+        })
     }
     impl_cols!{
         crate::view_schema::auction_and_winner,
@@ -216,6 +311,9 @@ impl AuctionWinner {
         last_change,
         winner_id,
         winner_bid,
+        last_timer_bump,
+        max_bid_user,
+        max_bid_amt,
     }
 }
 
@@ -239,10 +337,10 @@ impl AuctionWinner {
 #[derive(Debug,Clone,PartialEq,Eq,Queryable)]
 pub struct RawTransfer {
     pub rowid: i64,
-    pub ty: String,
-    pub from_user: Option<i64>,
+    pub ty: CurrencyId,
+    pub from_user: Option<UserId>,
     pub quantity: i64,
-    pub to_user: Option<i64>,
+    pub to_user: Option<UserId>,
     pub from_balance: Option<i64>,
     pub to_balance: Option<i64>,
     pub happened_at: DateTime<Utc>,
@@ -273,12 +371,12 @@ impl RawTransfer {
         auction_id,
     }
 
-    fn from(&self) -> Option<UserBalPair> {
-        self.from_user.map(|u| UserBalPair{user: u, bal: self.from_balance.unwrap()})
+    fn from(&self) -> Option<UserBal> {
+        self.from_user.map(|u| UserBal{ty: self.ty.clone(), user: u, bal: self.from_balance.unwrap()})
     }
 
-    fn to(&self) -> Option<UserBalPair> {
-        self.to_user.map(|u| UserBalPair{user: u, bal: self.to_balance.unwrap()})
+    fn to(&self) -> Option<UserBal> {
+        self.to_user.map(|u| UserBal{ty: self.ty.clone(), user: u, bal: self.to_balance.unwrap()})
     }
 }
 
@@ -293,32 +391,33 @@ fn __test_transfer_types() {
 }
 
 #[derive(Debug,Clone,PartialEq,Eq)]
-pub struct UserBalPair {
-    pub user: i64,
+pub struct UserBal {
+    pub user: UserId,
+    pub ty: CurrencyId,
     pub bal: i64,
 }
 
-impl UserBalPair {
+impl UserBal {
     pub fn discord_id(&self) -> serenity::model::id::UserId {
-        serenity::model::id::UserId(self.user.try_into().unwrap())
+        self.user.into_serenity()
     }
 }
 
 #[derive(Debug,Clone,PartialEq,Eq)]
 pub enum TransferExtra {
-    Motion{from:UserBalPair, motion_id:i64, votes: i64, created:bool},
-    ThinAir{to:UserBalPair, generated:bool},
-    Give{to:UserBalPair, from:UserBalPair, admin: bool},
-    AuctionCreate{ auction_id:i64, from:UserBalPair},
-    AuctionReserve{auction_id:i64, from:UserBalPair},
-    AuctionRefund{ auction_id:i64, to:UserBalPair},
-    AuctionPayout{ auction_id:i64, to:UserBalPair},
+    Motion{from:UserBal, motion_id:i64, votes: i64, created:bool},
+    ThinAir{to:UserBal, generated:bool},
+    Give{to:UserBal, from:UserBal, admin: bool},
+    AuctionCreate{ auction_id:i64, from:UserBal},
+    AuctionReserve{auction_id:i64, from:UserBal},
+    AuctionRefund{ auction_id:i64, to:UserBal},
+    AuctionPayout{ auction_id:i64, to:UserBal},
 }
 
 #[derive(Debug,Clone,PartialEq,Eq)]
 pub struct Transfer {
     pub rowid: i64,
-    pub pc_ty: String,
+    pub ty: CurrencyId,
     pub happened_at: DateTime<Utc>,
     pub message_id: Option<i64>,
     pub quantity: i64,
@@ -360,14 +459,14 @@ where
 impl From<RawTransfer> for Transfer {
     fn from(r: RawTransfer) -> Self {
         let rowid = r.rowid;
-        let pc_ty = r.ty.clone();
+        let ty = r.ty.clone();
         let happened_at = r.happened_at;
         let message_id = r.message_id;
         let comment = r.comment.clone();
         let quantity = r.quantity;
         let extra = match r.transfer_ty {
             TransferType::MotionCreate | TransferType::MotionVote => TransferExtra::Motion{
-                from: r.from().unwrap(), 
+                from: r.from().unwrap(),
                 motion_id: r.to_motion.unwrap(),
                 votes: r.to_votes.unwrap(),
                 created: matches!(r.transfer_ty, TransferType::MotionCreate)
@@ -401,7 +500,7 @@ impl From<RawTransfer> for Transfer {
 
         Transfer{
             rowid,
-            pc_ty,
+            ty,
             happened_at,
             message_id,
             quantity,

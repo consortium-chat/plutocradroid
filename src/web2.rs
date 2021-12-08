@@ -2,6 +2,7 @@ use std::fmt::Display;
 use std::fmt;
 use std::collections::HashMap;
 use std::borrow::Cow;
+use std::convert::TryInto;
 use rocket_oauth2::{OAuth2, TokenResponse};
 use rocket::http::{Cookies, Cookie, SameSite};
 use rocket::response::{Responder, Redirect};
@@ -14,11 +15,11 @@ use rocket::fairing;
 use maud::{html, Markup};
 use diesel::prelude::*;
 use chrono::{DateTime, Utc, SecondsFormat, TimeZone};
-use serenity::model::prelude::UserId;
 
 use crate::{schema, view_schema, rocket_diesel};
-use crate::models::{Motion, MotionVote, MotionWithCount, AuctionWinner, TransferType, Transfer, TransferExtra};
+use crate::models::{Motion, MotionVote, MotionWithCount, AuctionWinner, TransferType, Transfer, TransferExtra, self};
 use crate::bot::name_of;
+use crate::transfers;
 
 trait IntoOption {
     fn into_option_lazy<T>(self, f: impl FnOnce() -> T) -> Option<T>;
@@ -116,7 +117,8 @@ struct VoteForm {
 #[derive(Debug, Clone, FromForm)]
 struct BidForm {
     csrf: String,
-    amount: u32,
+    amount: i64,
+    is_max_bid: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -162,8 +164,8 @@ struct Deets {
 }
 
 impl Deets {
-    pub fn id(&self) -> i64 {
-        self.discord_user.id()
+    pub fn id(&self) -> models::UserId {
+        self.discord_user.id().try_into().unwrap()
     }
 }
 
@@ -498,7 +500,7 @@ fn display_auction(auction:&AuctionWinner) -> Markup {
                 @if auction.finished {
                     @if let Some(winner_id) = auction.winner_id {
                         "Auction won by "
-                        (name_of(serenity::model::id::UserId::from(winner_id as u64)))
+                        (name_of(winner_id.into_serenity()))
                         " for "
                         (auction.winner_bid.unwrap()) " " (auction.bid_ty)
                         "."
@@ -510,7 +512,7 @@ fn display_auction(auction:&AuctionWinner) -> Markup {
                         "Current bid is "
                         (auction.winner_bid.unwrap()) " " (auction.bid_ty)
                         " by "
-                        (name_of(serenity::model::id::UserId::from(winner_id as u64)))
+                        (name_of(winner_id.into_serenity()))
                     } @else {
                         "No bids. Minimum bid is " (auction.bid_min) " " (auction.bid_ty) "."
                     }
@@ -527,7 +529,6 @@ fn display_auction(auction:&AuctionWinner) -> Markup {
 #[derive(Debug,Responder)]
 enum RocketIsDumb {
     S(rocket::http::Status),
-    R(Redirect),
     M(Markup),
 }
 
@@ -549,30 +550,33 @@ fn auction_bid(
         return RocketIsDumb::S(rocket::http::Status::BadRequest);
     }
 
-    let deets:&Deets;
-    if let Some(d) = ctx.deets.as_ref() {
-        deets = d;
+    let deets:&Deets = if let Some(d) = ctx.deets.as_ref() {
+        d
     } else {
         info!("no deets");
         return RocketIsDumb::S(rocket::http::Status::Unauthorized);
+    };
+
+    if data.amount < 0 {
+        return RocketIsDumb::S(rocket::http::Status::BadRequest);
     }
 
     let mut res:Option<RocketIsDumb> = None;
-    let mut fail_msg:Option<&'static str> = None;
+    let mut status_msg:Option<String> = None;
 
-    ctx.conn.transaction::<_,diesel::result::Error,_>(|| {
-        use view_schema::balance_history::dsl as bhdsl;
-        use schema::transfers::dsl as tdsl;
+    let transaction_res = ctx.conn.transaction::<_,diesel::result::Error,_>(|| {
         use schema::auctions::dsl as adsl;
         use view_schema::auction_and_winner::dsl as anw;
         
+        // This needs to be a separate statement from the AuctionWinner because AuctionWinner joins multiple tables
+        // and thus cannot be locked with .for_update().
         let maybe_auction_id:Option<i64> = adsl::auctions
-        .select(adsl::rowid)
-        .filter(adsl::rowid.eq(id))
-        .for_update()
-        .get_result(&*ctx)
-        .optional()
-        .unwrap();
+            .select(adsl::rowid)
+            .filter(adsl::rowid.eq(id))
+            .for_update()
+            .get_result(&*ctx)
+            .optional()
+            .unwrap();
 
         if maybe_auction_id.is_none() {
             res = Some(RocketIsDumb::S(rocket::http::Status::NotFound));
@@ -580,25 +584,25 @@ fn auction_bid(
         }
 
         let auction:AuctionWinner = anw::auction_and_winner
-        .select(AuctionWinner::cols())
-        .filter(anw::auction_id.eq(id))
-        .get_result(&*ctx)
-        .unwrap();
+            .select(AuctionWinner::cols())
+            .filter(anw::auction_id.eq(id))
+            .get_result(&*ctx)
+            .unwrap();
 
         if now > auction.end_at() {
-            fail_msg = Some("Bid failed: Auction has ended");
+            status_msg = Some("Bid failed: Auction has ended".to_string());
             return Ok(());
         }
 
-        if data.amount < (auction.current_min_bid() as u32) {
-            fail_msg = Some("Bid failed: You must bid more than that.");
+        if data.amount < auction.current_min_bid() {
+            status_msg = Some("Bid failed: You must bid more than that.".to_string());
             return Ok(());
         }
 
-        if Some(deets.id()) == auction.winner_id {
-            fail_msg = Some("Bid failed: You cannot increase your own bid.");
-            return Ok(());
-        }
+        // if Some(deets.id()) == auction.winner_id {
+        //     fail_msg = Some("Bid failed: You cannot increase your own bid.");
+        //     return Ok(());
+        // }
         let mut to_lock = vec![];
         to_lock.push(deets.id());
         if let Some(prev_bidder) = auction.winner_id {
@@ -606,60 +610,194 @@ fn auction_bid(
                 to_lock.push(prev_bidder);
             }
         }
-        to_lock.sort();
-        for id in to_lock {
-            bhdsl::balance_history
-            .select(bhdsl::rowid)
-            .filter(bhdsl::user.eq(id))
-            .filter(bhdsl::ty.eq(&auction.bid_ty))
-            .for_update()
-            .execute(&*ctx)?;
+
+        let mut handle = crate::transfers::TransferHandler::new(
+            &*ctx,
+            to_lock,
+            vec![auction.offer_ty.clone(), auction.bid_ty.clone()],
+        )?;
+
+        let challenger_id = deets.id();
+
+        let mut challenger_available_balance = handle.balance(challenger_id, auction.bid_ty.clone());
+        if let Some((user, amt)) = auction.winner() {
+            if user == challenger_id {
+                challenger_available_balance = challenger_available_balance.checked_add(amt).unwrap();
+            }
         }
-        let get_balance = |id| bhdsl::balance_history
-        .select(bhdsl::balance)
-        .filter(bhdsl::user.eq(id))
-        .filter(bhdsl::ty.eq(&auction.bid_ty))
-        .order(bhdsl::happened_at.desc())
-        .limit(1)
-        .get_result(&*ctx)
-        .unwrap_or(0):i64;
-        let curr_user_balance = get_balance(deets.id());
-        if curr_user_balance < data.amount.into():i64 {
-            fail_msg = Some("Bid failed: You do not have enough fungibles.");
+        
+        // This test must be *before* the bid is tested against the current max bid; Otherwise the bid could be increased if someone else has a higher max bid, regardless of if you have the dough to support it.
+        if challenger_available_balance < data.amount {
+            status_msg = Some(
+                format!(
+                    "Bid failed: You do not have enough {}",
+                    auction.bid_ty.clone()
+                )
+            );
             return Ok(());
         }
 
-        if let Some(prev_winner_id) = auction.winner_id {
-            let prev_winner_balance = get_balance(prev_winner_id);
-            //return prev_winner's fungibles
-            diesel::insert_into(tdsl::transfers).values((
-                tdsl::ty.eq(&auction.bid_ty),
-                tdsl::quantity.eq(&auction.winner_bid.unwrap()),
-                tdsl::to_user.eq(prev_winner_id),
-                tdsl::to_balance.eq(prev_winner_balance + auction.winner_bid.unwrap()),
-                tdsl::happened_at.eq(diesel::dsl::now),
-                tdsl::transfer_ty.eq(crate::models::TransferType::AuctionRefund),
-                tdsl::auction_id.eq(&auction.auction_id),
-            )).execute(&*ctx).unwrap();
+        let maybe_old_bid = auction.winner();
+
+        let new_bid;
+        let new_max_bid;
+
+        if let Some(max_bid_bad) = auction.max_bid() {
+            let max_bid_user = max_bid_bad.user;
+            
+            let attempted_max_bid = max_bid_bad.amount;
+            // The highest value that could be the actual max bid
+            let max_max_bid = handle.balance(max_bid_bad.user, max_bid_bad.currency) + auction.winner().unwrap().1;
+            let max_bid_amount = if attempted_max_bid > max_max_bid { max_max_bid } else { attempted_max_bid };
+
+            if challenger_id == max_bid_user {
+                new_bid = (max_bid_user, auction.winner().unwrap().1);
+                new_max_bid = Some((max_bid_user, data.amount));
+                status_msg = Some(
+                    format!(
+                        "You have set your max bid to {amount}{ty}.",
+                        ty = auction.bid_ty,
+                        amount = data.amount,
+                    )
+                );
+            } else if data.amount <= max_bid_amount {
+                new_bid = (max_bid_user, data.amount);
+                new_max_bid = Some((max_bid_user, attempted_max_bid));
+                status_msg = Some(
+                    format!(
+                        "Your bid was not greater than {champion}'s existing max bid; The bid is now at {amount}{ty}.",
+                        ty = auction.bid_ty,
+                        champion = name_of(new_bid.0.into_serenity()),
+                        amount = new_bid.1,
+                    )
+                );
+            } else if data.is_max_bid {
+                new_bid = (challenger_id, max_bid_amount.checked_add(1).unwrap());
+                new_max_bid = Some((challenger_id, data.amount));
+                status_msg = Some(
+                    format!(
+                        "You have set a max bid of {max}{ty}. The bid is now at {amount}{ty}",
+                        ty = auction.bid_ty,
+                        max = data.amount,
+                        amount = new_bid.1,
+                    )
+                );
+            } else {
+                new_bid = (challenger_id, data.amount);
+                new_max_bid = None;
+                status_msg = Some(
+                    format!(
+                        "You have successfully bid {amount}{ty}",
+                        ty = auction.bid_ty,
+                        amount = new_bid.1
+                    )
+                );
+            }
+        } else if let Some(old_bid) = auction.winner() {
+            if data.amount <= old_bid.1 {
+                new_bid = old_bid;
+                new_max_bid = None;
+                status_msg = Some(
+                    format!(
+                        "Your bid is below the current bid of {amount}{ty}.",
+                        ty = auction.bid_ty,
+                        amount = old_bid.1,
+                    )
+                );
+            } else if data.is_max_bid {
+                new_bid = (challenger_id, old_bid.1.checked_add(1).unwrap());
+                new_max_bid = Some((challenger_id, data.amount));
+                status_msg = Some(
+                    format!(
+                        "You have set a max bid of {max}{ty}. The bid is now {amount}{ty}",
+                        ty = auction.bid_ty,
+                        max = data.amount,
+                        amount = new_bid.1,
+                    )
+                );
+            } else {
+                new_bid = (challenger_id, data.amount);
+                new_max_bid = None;
+                status_msg = Some(
+                    format!(
+                        "You have successfully bid {amount}{ty}",
+                        ty = auction.bid_ty,
+                        amount = new_bid.1,
+                    )
+                )
+            }
+        } else if data.amount >= auction.bid_min {
+            if data.is_max_bid {
+                new_bid = (challenger_id, auction.bid_min);
+                new_max_bid = Some((challenger_id, data.amount));
+                status_msg = Some(
+                    format!(
+                        "You have placed the first bid of {amount}{ty}, and set your max bid to {max}{ty}",
+                        ty = auction.bid_ty,
+                        amount = auction.bid_min,
+                        max = data.amount,
+                    )
+                )
+            } else {
+                new_bid = (challenger_id, data.amount);
+                new_max_bid = None;
+                status_msg = Some(
+                    format!(
+                        "You have placed the first bid of {amount}{ty}",
+                        ty = auction.bid_ty,
+                        amount = data.amount,
+                    )
+                )
+            }
+        } else {
+            status_msg = Some("Your bid is below the minimum bid amount".to_string());
+            return Ok(());
         }
 
-        diesel::insert_into(tdsl::transfers).values((
-            tdsl::ty.eq(&auction.bid_ty),
-            tdsl::quantity.eq(data.amount as i64),
-            tdsl::from_user.eq(deets.id()),
-            tdsl::from_balance.eq(curr_user_balance - (data.amount as i64)),
-            tdsl::happened_at.eq(diesel::dsl::now),
-            tdsl::transfer_ty.eq(crate::models::TransferType::AuctionReserve),
-            tdsl::auction_id.eq(auction.auction_id),
-        )).execute(&*ctx).unwrap();
+        if maybe_old_bid != Some(new_bid) {
+            if let Some(old_bid) = maybe_old_bid {
+                // refund old bidder
+                let t = transfers::TransactionBuilder::new(old_bid.1, auction.bid_ty.clone(), now)
+                    .auction_refund(old_bid.0, &auction);
+                match handle.transfer(t) {
+                    Err(transfers::TransferError::NotEnough) => unreachable!("It is nonsensical for an addition of funds to lack sufficient balance."),
+                    Err(transfers::TransferError::Overflow) => panic!("The consortium has reached a state such that more than 2^63 fungibles exist, and this code was not designed to handle that"),
+                    Ok(v) => v?,
+                }
+            }
+            // charge new bidder
+            let t = transfers::TransactionBuilder::new(new_bid.1, auction.bid_ty.clone(), now)
+                .auction_reserve(new_bid.0, &auction);
+            match handle.transfer(t) {
+                Err(transfers::TransferError::NotEnough) => unreachable!("We have a lock on transactions for this user, and already checked they have enough fungibles."),
+                Err(transfers::TransferError::Overflow) => panic!("The consortium has reached a state such that more than 2^63 fungibles exist, and this code was not designed to handle that"),
+                Ok(v) => v?,
+            }
+        }
 
-        res = Some(RocketIsDumb::R(Redirect::to(format!("/auctions/{}", damm_id))));
+        // The timer is bumped iff the winning bidder changed
+        let new_timer_bumped = if maybe_old_bid.map(|b| b.0) != Some(new_bid.0) {
+            now
+        } else { auction.last_timer_bump };
+
+        diesel::update(adsl::auctions).set((
+            adsl::last_timer_bump.eq(new_timer_bumped),
+            adsl::max_bid_user.eq(new_max_bid.map(|a| a.0)),
+            adsl::max_bid_amt.eq(new_max_bid.map(|a| a.1)),
+        )).execute(&*ctx.conn).unwrap();
+        
         Ok(())
-    }).unwrap();
+    });
 
-    if let Some(fail_msg) = fail_msg {
-        RocketIsDumb::M(page(&mut ctx, "Auction bid failed", html!{
-            main { (fail_msg) }
+    match transaction_res {
+        Ok(()) => (),
+        Err(diesel::result::Error::RollbackTransaction) => (),
+        e => e.unwrap(),
+    }
+
+    if let Some(status_msg) = status_msg {
+        RocketIsDumb::M(page(&mut ctx, "Auction bid", html!{
+            main { (status_msg) }
             br;
             a href={"/auctions/" (damm_id)} { "Return to auction" }
             br;
@@ -746,9 +884,16 @@ fn auction_view(
                 @if ctx.deets.is_some() {
                     form action={"/auctions/" (damm_id) "/bid"} method="post" {
                         input type="hidden" name="csrf" value=(ctx.csrf_token.clone());
-                        "Bid "
-                        input type="number" name="amount" min=(auction.current_min_bid()) value=(auction.current_min_bid());
-                        (auction.bid_ty)
+                        label {
+                            "Bid "
+                            input type="number" name="amount" min=(auction.current_min_bid()) value=(auction.current_min_bid());
+                            (auction.bid_ty)
+                        }
+                        br;
+                        select name="is_max_bid" {
+                            option value="n" selected { "Actually bid" }
+                            option value="y" { "Set my maximum bid" }
+                        }
                         br;
                         button type="submit" { "Place bid" }
                     }
@@ -899,7 +1044,7 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
         .iter()
         .map(|v| if v.direction { (v.amount, 0) } else { (0, v.amount) })
         .fold((0,0), |acc, x| (acc.0 + x.0, acc.1 + x.1));
-    let vote_directions:HashMap<i64, bool> = votes
+    let vote_directions:HashMap<models::UserId, bool> = votes
         .iter()
         .map(|v| (v.user, v.direction))
         .collect();
@@ -914,7 +1059,7 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
         if motion.end_at() > Utc::now() {
             let mut agents_vote:Option<MotionVote> = None;
             for vote in &votes {
-                if vote.user == atoi::atoi::<i64>(deets.discord_user.id.as_bytes()).unwrap() {
+                if vote.user == deets.id() {
                     agents_vote = Some(*vote);
                 }
             }
@@ -1002,7 +1147,7 @@ fn motion_listing(mut ctx: CommonContext, damm_id: String) -> impl Responder<'st
                 hr;
                 dl.motion-votes {
                     @for vote in &votes {
-                        dt { (name_of(UserId::from(vote.user as u64))) }
+                        dt { (name_of(vote.user.into_serenity())) }
                         dd {
                             (vote.amount)
                             @if vote.direction {
@@ -1114,11 +1259,6 @@ sql_function!{
     #[sql_name = "coalesce"]
     fn coalesce_2<T: diesel::sql_types::NotNull>(a: diesel::sql_types::Nullable<T>, b: T) -> T;
 }
-// use diesel::sql_types::Bool;
-// sql_function!{
-//     #[sql_name = "coalesce"]
-//     fn coalesce_2_bool(a: diesel::sql_types::Nullable<Bool>, b: Bool) -> Bool;
-// }
 
 #[get("/my-transactions?<before_ms>&<fun_ty>")]
 fn my_transactions(

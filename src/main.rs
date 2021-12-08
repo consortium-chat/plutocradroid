@@ -22,6 +22,7 @@ mod static_responders;
 mod worker;
 mod tasks;
 mod fix_transactions;
+mod transfers;
 
 use std::{env,panic,process};
 

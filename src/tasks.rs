@@ -36,9 +36,9 @@ pub async fn create_auto_auctions(
                     adsl::created_at.eq(chrono::Utc::now()),
                     adsl::auctioneer.eq(None:Option<i64>),
                     adsl::offer_ty.eq("gen"),
-                    adsl::offer_amt.eq(1i32),
+                    adsl::offer_amt.eq(1i64),
                     adsl::bid_ty.eq("pc"),
-                    adsl::bid_min.eq(1i32),
+                    adsl::bid_min.eq(1i64),
                 ))
                 .execute(conn)?;
                 diesel::update(sdsl::single).set(sdsl::last_auto_auction.eq(next_auction)).execute(conn)?;
@@ -62,39 +62,29 @@ pub async fn process_auctions(
     cnh: &impl CacheHttp,
 ) -> CommandResult {
     use diesel::prelude::*;
+    use view_schema::auction_and_winner::dsl as anw;
     use schema::auctions::dsl as adsl; //asymmetric digital subscriber line
     use schema::transfers::dsl as tdsl;
 
     let now = chrono::Utc::now();
 
-    #[derive(Debug, Clone, Queryable)]
-    struct Auction {
-        pub rowid:i64,
-        pub created_at:chrono::DateTime<chrono::Utc>,
-        pub offer_ty:String,
-        pub offer_amt:i32,
-    }
+    use crate::models::AuctionWinner;
 
-    let auctions_needing_processing:Vec<Auction> = adsl::auctions
-    .select((
-        adsl::rowid,
-        adsl::created_at,
-        adsl::offer_ty,
-        adsl::offer_amt,
-    ))
-    .filter(adsl::finished.eq(false))
-    .get_results_async(pool).await?;
+    let auctions_needing_processing:Vec<AuctionWinner> = anw::auction_and_winner
+        .select(AuctionWinner::cols())
+        .filter(anw::finished.eq(false))
+        .get_results_async(pool).await?;
 
     for auction in auctions_needing_processing {
         let last_bid:Option<(chrono::DateTime<chrono::Utc>,Option<i64>)> = tdsl::transfers
-        .select((tdsl::happened_at,tdsl::from_user))
-        .filter(tdsl::auction_id.eq(auction.rowid))
-        .filter(tdsl::transfer_ty.eq(TransferType::AuctionReserve))
-        .order(tdsl::happened_at.desc())
-        .limit(1)
-        .get_result_async(pool)
-        .await
-        .optional()?;
+            .select((tdsl::happened_at,tdsl::from_user))
+            .filter(tdsl::auction_id.eq(auction.auction_id))
+            .filter(tdsl::transfer_ty.eq(TransferType::AuctionReserve))
+            .order(tdsl::happened_at.desc())
+            .limit(1)
+            .get_result_async(pool)
+            .await
+            .optional()?;
         let last_action_time = last_bid.map(|(time,_)| time).unwrap_or(auction.created_at);
         let finishes_at = last_action_time + *crate::AUCTION_EXPIRATION;
         if finishes_at < now {
@@ -120,10 +110,10 @@ pub async fn process_auctions(
                         tdsl::happened_at.eq(chrono::Utc::now()),
                         tdsl::ty.eq(auction.offer_ty.as_str()),
                         tdsl::transfer_ty.eq(TransferType::AuctionPayout),
-                        tdsl::auction_id.eq(auction.rowid),
+                        tdsl::auction_id.eq(auction.auction_id),
                     )).execute(conn)?;
 
-                    diesel::update(adsl::auctions.filter(adsl::rowid.eq(auction.rowid))).set(adsl::finished.eq(true)).execute(conn)?;
+                    diesel::update(adsl::auctions.filter(adsl::rowid.eq(auction.auction_id))).set(adsl::finished.eq(true)).execute(conn)?;
             
                     Ok(())
                 }).await?;
@@ -132,7 +122,7 @@ pub async fn process_auctions(
                     use serenity::prelude::Mentionable;
                     m.content(format!(
                         "Auction#{0} finished. {2} received {3} {4}. Visit <{1}/auctions/{0}> for more details.",
-                        damm::add_to_str(auction.rowid.to_string()),
+                        damm::add_to_str(auction.auction_id.to_string()),
                         crate::SITE_URL,
                         serenity::model::id::UserId::from(user_id as u64).mention(),
                         auction.offer_amt,
@@ -140,11 +130,11 @@ pub async fn process_auctions(
                     ))
                 }).await?;
             } else {
-                diesel::update(adsl::auctions.filter(adsl::rowid.eq(auction.rowid))).set(adsl::finished.eq(true)).execute_async(pool).await?;
+                diesel::update(adsl::auctions.filter(adsl::rowid.eq(auction.auction_id))).set(adsl::finished.eq(true)).execute_async(pool).await?;
                 serenity::model::id::ChannelId::from(bot::MOTIONS_CHANNEL).send_message(cnh.http(), |m| {
                     m.content(format!(
                         "Auction#{0} finished. There were no bids, no one gets anything. Visit <{1}/auctions/{0}> for no details.",
-                        damm::add_to_str(auction.rowid.to_string()),
+                        damm::add_to_str(auction.auction_id.to_string()),
                         crate::SITE_URL,
                     ))
                 }).await?;
