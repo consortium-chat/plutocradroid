@@ -52,7 +52,7 @@ impl serenity::prelude::TypeMapKey for DbPoolKey {
 struct General;
 
 #[group]
-#[commands(fabricate)]
+#[commands(fabricate, debug_make_auction)]
 struct Debug;
 
 use std::env;
@@ -385,30 +385,73 @@ async fn ping(ctx: &Context, msg: &Message) -> CommandResult {
     Ok(())
 }
 
-#[command]
-#[num_args(2)]
-async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
-    let now = Utc::now();
-    trace!("fabricate");
+async fn find_item_type(pool: &DbPool, ty_str:String) -> CommandResult<ItemType> {
     use diesel::prelude::*;
     use schema::item_types::dsl as it;
     use schema::item_type_aliases::dsl as ita;
-    let pool = Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap());
-
-    let ty:ItemType;
-    let ty_str:String = args.single()?;
-    let alias:Option<ItemType> = ita::item_type_aliases
+    let maybe_res = ita::item_type_aliases
         .inner_join(it::item_types)
         .select(ItemType::cols())
         .filter(ita::alias.eq(&ty_str))
         .get_result_async(&*pool)
         .await
         .optional()?;
-    if let Some(it) = alias {
-        ty = it;
-    } else {
-        return Err("Unrecognized type".into());
+    match maybe_res {
+        None => Err("Unrecognized type".into()),
+        Some(v) => Ok(v),
     }
+} 
+
+// Use like &debug_make_auction 10 gen 1 pc
+// to create an auction offering 10 gens at a minimum bid of 1 pc
+#[command]
+#[num_args(4)]
+async fn debug_make_auction(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
+    use diesel::prelude::*;
+    use schema::auctions::dsl as adsl;
+    let now = Utc::now();
+    let pool = Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap());
+
+    let offer_amt:i64 = args.single()?;
+    if offer_amt < 1 { return Err("fuck".into()); }
+    let offer_ty = find_item_type(&*pool, args.single()?).await?;
+
+    let min_bid_amt:i64 = args.single()?;
+    if min_bid_amt < 1 { return Err("fuck".into()); }
+    let bid_ty = find_item_type(&*pool, args.single()?).await?;
+
+    let auction_id:i64 = diesel::insert_into(adsl::auctions).values((
+        adsl::created_at.eq(now),
+        adsl::offer_ty.eq(offer_ty.id),
+        adsl::offer_amt.eq(offer_amt),
+        adsl::bid_ty.eq(bid_ty.id),
+        adsl::bid_min.eq(min_bid_amt),
+        adsl::last_timer_bump.eq(now),
+    )).returning(adsl::rowid).get_result_async(&*pool).await?;
+
+    let auction_damm_id = damm::add_to_str(auction_id.to_string());
+
+    msg.reply(&ctx, format!(
+        "Create auction#{} auctioning {} {} for a minimum of {} {}",
+        auction_damm_id,
+        offer_amt,
+        offer_ty.long_name_ambiguous,
+        min_bid_amt,
+        bid_ty.long_name_ambiguous,
+    )).await?;
+
+    Ok(())
+}
+
+#[command]
+#[num_args(2)]
+async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
+    let now = Utc::now();
+    trace!("fabricate");
+    let pool = Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap());
+
+    let ty_str:String = args.single()?;
+    let ty = find_item_type(&*pool, ty_str).await?;
     let how_many:i64 = args.single()?;
     if how_many <= 0 {
         return Err("fuck".into());
