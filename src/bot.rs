@@ -955,6 +955,9 @@ pub fn vote_common(
     command_message_id:Option<i64>,
 ) -> Cow<'static, str> {
     trace!("vote_common");
+    if vote_count < 0 {
+        return Cow::Borrowed("Can not vote a negative number of times.");
+    }
     let mut fail:Option<&'static str> = None;
     let mut outer_cost:Option<i64> = None;
     let mut outer_motion_id:Option<i64> = None;
