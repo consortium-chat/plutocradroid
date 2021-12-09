@@ -3,7 +3,7 @@ use serenity::framework::standard::CommandResult;
 use serenity::http::CacheHttp;
 use diesel::prelude::*;
 use tokio_diesel::{AsyncRunQueryDsl,AsyncConnection};
-use chrono::TimeZone;
+use chrono::{Utc,TimeZone};
 use crate::damm;
 use crate::schema;
 use crate::view_schema;
@@ -28,16 +28,18 @@ pub async fn create_auto_auctions(
         next_auction = next_auction.date().and_time(*crate::AUTO_AUCTION_AT).unwrap();
 
         if now > next_auction {
+            let now = Utc::now();
             let auction_id:i64 = pool.transaction(|conn| {
                 let auction_id:i64 = diesel::insert_into(tid::thing_ids).default_values().returning(tid::rowid).get_result(conn)?;
                 diesel::insert_into(adsl::auctions).values((
                     adsl::rowid.eq(auction_id),
-                    adsl::created_at.eq(chrono::Utc::now()),
+                    adsl::created_at.eq(now),
                     adsl::auctioneer.eq(None:Option<i64>),
                     adsl::offer_ty.eq("gen"),
                     adsl::offer_amt.eq(1i64),
                     adsl::bid_ty.eq("pc"),
                     adsl::bid_min.eq(1i64),
+                    adsl::last_timer_bump.eq(now),
                 ))
                 .execute(conn)?;
                 diesel::update(sdsl::single).set(sdsl::last_auto_auction.eq(next_auction)).execute(conn)?;

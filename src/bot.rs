@@ -409,6 +409,7 @@ async fn find_item_type(pool: &DbPool, ty_str:String) -> CommandResult<ItemType>
 async fn debug_make_auction(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     use diesel::prelude::*;
     use schema::auctions::dsl as adsl;
+    use schema::thing_ids::dsl as tid;
     let now = Utc::now();
     let pool = Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap());
 
@@ -419,15 +420,17 @@ async fn debug_make_auction(ctx: &Context, msg: &Message, mut args: Args) -> Com
     let min_bid_amt:i64 = args.single()?;
     if min_bid_amt < 1 { return Err("fuck".into()); }
     let bid_ty = find_item_type(&*pool, args.single()?).await?;
+    let auction_id:i64 = diesel::insert_into(tid::thing_ids).default_values().returning(tid::rowid).get_result_async(&*pool).await?;
 
-    let auction_id:i64 = diesel::insert_into(adsl::auctions).values((
+    diesel::insert_into(adsl::auctions).values((
+        adsl::rowid.eq(auction_id),
         adsl::created_at.eq(now),
         adsl::offer_ty.eq(offer_ty.id),
         adsl::offer_amt.eq(offer_amt),
         adsl::bid_ty.eq(bid_ty.id),
         adsl::bid_min.eq(min_bid_amt),
         adsl::last_timer_bump.eq(now),
-    )).returning(adsl::rowid).get_result_async(&*pool).await?;
+    )).execute_async(&*pool).await?;
 
     let auction_damm_id = damm::add_to_str(auction_id.to_string());
 

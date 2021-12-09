@@ -891,8 +891,8 @@ fn auction_view(
                         }
                         br;
                         select name="is_max_bid" {
-                            option value="n" selected { "Actually bid" }
-                            option value="y" { "Set my maximum bid" }
+                            option value="false" selected { "Actually bid" }
+                            option value="true" { "Set my maximum bid" }
                         }
                         br;
                         button type="submit" { "Place bid" }

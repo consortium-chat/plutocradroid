@@ -255,6 +255,7 @@ impl<'a> TransferHandler<'a> {
                 let maybe_bal = bhdsl::balance_history
                     .select(bhdsl::balance)
                     .filter(bhdsl::user.eq(u))
+                    .filter(bhdsl::ty.eq(&c))
                     .order(bhdsl::happened_at.desc())
                     .limit(1)
                     .for_update()
@@ -313,6 +314,7 @@ impl<'a> TransferHandler<'a> {
             transfer.comment,
             transfer.transfer_ty.unwrap(),
             transfer.auction_id,
+            transfer.happened_at,
             false,
         )
     }
@@ -329,6 +331,7 @@ impl<'a> TransferHandler<'a> {
         comment: Option<String>,
         transfer_ty: crate::models::TransferType,
         auction_id: Option<i64>,
+        happened_at: DateTime<Utc>,
         force: bool,
     ) -> Result<diesel::QueryResult<()>, TransferError> {
         let mut maybe_from_balance = None;
@@ -370,6 +373,7 @@ impl<'a> TransferHandler<'a> {
                     tdsl::comment.eq(comment),
                     tdsl::transfer_ty.eq(transfer_ty),
                     tdsl::auction_id.eq(auction_id),
+                    tdsl::happened_at.eq(happened_at),
                 ))
                 .execute(self.conn)
                 .map(|_| ())
