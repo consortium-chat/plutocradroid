@@ -651,15 +651,29 @@ fn auction_bid(
             let max_bid_amount = if attempted_max_bid > max_max_bid { max_max_bid } else { attempted_max_bid };
 
             if challenger_id == max_bid_user {
-                new_bid = (max_bid_user, auction.winner().unwrap().1);
-                new_max_bid = Some((max_bid_user, data.amount));
-                status_msg = Some(
-                    format!(
-                        "You have set your max bid to {amount}{ty}.",
-                        ty = auction.bid_ty,
-                        amount = data.amount,
-                    )
-                );
+                if data.is_max_bid {
+                    new_bid = (max_bid_user, auction.winner().unwrap().1);
+                    new_max_bid = Some((max_bid_user, data.amount));
+                    status_msg = Some(
+                        format!(
+                            "You have set your max bid to {amount}{ty}.",
+                            ty = auction.bid_ty,
+                            amount = data.amount,
+                        )
+                    );
+                } else if data.amount >= auction.winner().unwrap().1 {
+                    new_bid = (max_bid_user, data.amount);
+                    new_max_bid = Some((max_bid_user, attempted_max_bid));
+                    status_msg = Some(
+                        format!(
+                            "You have increased your actual bid to {amount}{ty}",
+                            ty = auction.bid_ty,
+                            amount = data.amount,
+                        )
+                    );
+                } else {
+                    unreachable!();
+                }
             } else if data.amount <= max_bid_amount {
                 new_bid = (max_bid_user, data.amount);
                 new_max_bid = Some((max_bid_user, attempted_max_bid));
@@ -881,7 +895,7 @@ fn auction_view(
         main {
             (display_auction(&auction))
             @if !auction.finished {
-                @if ctx.deets.is_some() {
+                @if let Some(ref deets) = ctx.deets {
                     form action={"/auctions/" (damm_id) "/bid"} method="post" {
                         input type="hidden" name="csrf" value=(ctx.csrf_token.clone());
                         label {
@@ -896,6 +910,18 @@ fn auction_view(
                         }
                         br;
                         button type="submit" { "Place bid" }
+                    }
+                    details {
+                        summary { "Tap to show max bid information" }
+                        @if auction.max_bid_user == Some(deets.id()) {
+                            "Your max bid is "
+                            (auction.max_bid_amt.unwrap())
+                            " "
+                            (auction.bid_ty)
+                            "."
+                        } @else {
+                            "You have no max bid set."
+                        }
                     }
                 } @else {
                     div { "Log in to bid" }
@@ -1346,7 +1372,7 @@ fn my_transactions(
             .filter(coalesce_2(bh::ty.nullable().eq(fun_ty.as_option()).nullable(), true))
             .filter(coalesce_2(bh::happened_at.nullable().lt(Utc.timestamp_millis_opt(before_ms).single()).nullable(),true))
             .filter(bh::transfer_ty.ne(TransferType::Generated))
-            .order(bh::happened_at.desc())
+            .order((bh::happened_at.desc(), bh::rowid.desc(), bh::sign.desc()))
             .limit(limit+1);
         info!("{}", diesel::debug_query(&q));
         let txns:Vec<Transaction> = q.get_results(&*ctx)
@@ -1360,7 +1386,7 @@ fn my_transactions(
                 .filter(coalesce_2(bh::happened_at.nullable().lt(Utc.timestamp_millis_opt(before_ms).single()).nullable(),true))
                 .filter(bh::happened_at.gt(last.happened_at))
                 .filter(bh::transfer_ty.eq(TransferType::Generated))
-                .order(bh::happened_at.desc())
+                .order((bh::happened_at.desc(), bh::rowid.desc()))
                 .get_results(&*ctx)
                 .unwrap()
         } else { Vec::new() };

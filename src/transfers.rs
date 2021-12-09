@@ -256,7 +256,7 @@ impl<'a> TransferHandler<'a> {
                     .select(bhdsl::balance)
                     .filter(bhdsl::user.eq(u))
                     .filter(bhdsl::ty.eq(&c))
-                    .order(bhdsl::happened_at.desc())
+                    .order((bhdsl::happened_at.desc(), bhdsl::rowid.desc(), bhdsl::sign.desc()))
                     .limit(1)
                     .for_update()
                     .get_result(conn)

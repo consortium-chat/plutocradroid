@@ -529,7 +529,7 @@ async fn balances(ctx: &Context, msg: &Message) -> CommandResult {
         .select(bh::balance)
         .filter(bh::user.eq(msg.author.id.0 as i64))
         .filter(bh::ty.eq(it.db_name()))
-        .order(bh::happened_at.desc())
+        .order((bh::happened_at.desc(), bh::rowid.desc(), bh::sign.desc()))
         .limit(1)
         .get_result_async(&*pool)
         .await
@@ -706,7 +706,7 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
         .select(bhdsl::balance)
         .filter(bhdsl::ty.eq("pc"))
         .filter(bhdsl::user.eq(msg.author.id.0 as i64))
-        .order(bhdsl::happened_at.desc())
+        .order((bhdsl::happened_at.desc(), bhdsl::rowid.desc(), bhdsl::sign.desc()))
         .limit(1)
         .get_result_async(&*pool).await?;
     
