@@ -37,7 +37,7 @@ use tokio::task;
 use async_trait::async_trait;
 
 use crate::is_win::is_win;
-use crate::models;
+use crate::models::{self, ItemType};
 use crate::transfers::{TransferHandler, TransactionBuilder, TransferError, CurrencyId};
 
 pub type DbPool = diesel::r2d2::Pool<diesel::r2d2::ConnectionManager<diesel::PgConnection>>;
@@ -385,23 +385,6 @@ async fn ping(ctx: &Context, msg: &Message) -> CommandResult {
     Ok(())
 }
 
-async fn find_item_type(pool: &DbPool, ty_str:String) -> CommandResult<ItemType> {
-    use diesel::prelude::*;
-    use schema::item_types::dsl as it;
-    use schema::item_type_aliases::dsl as ita;
-    let maybe_res = ita::item_type_aliases
-        .inner_join(it::item_types)
-        .select(ItemType::cols())
-        .filter(ita::alias.eq(&ty_str))
-        .get_result_async(&*pool)
-        .await
-        .optional()?;
-    match maybe_res {
-        None => Err("Unrecognized type".into()),
-        Some(v) => Ok(v),
-    }
-} 
-
 // Use like &debug_make_auction 10 gen 1 pc
 // to create an auction offering 10 gens at a minimum bid of 1 pc
 #[command]
@@ -551,7 +534,6 @@ async fn balances(ctx: &Context, msg: &Message) -> CommandResult {
     Ok(())
 }
 
-use crate::models::ItemType;
 
 #[command]
 #[min_args(2)]
@@ -678,6 +660,23 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
     }
     
     Ok(())
+}
+
+async fn find_item_type(pool: &DbPool, ty_str:String) -> CommandResult<ItemType> {
+    use diesel::prelude::*;
+    use schema::item_types::dsl as it;
+    use schema::item_type_aliases::dsl as ita;
+    let maybe_res = ita::item_type_aliases
+        .inner_join(it::item_types)
+        .select(ItemType::cols())
+        .filter(ita::alias.eq(&ty_str))
+        .get_result_async(&*pool)
+        .await
+        .optional()?;
+    match maybe_res {
+        None => Err("Unrecognized type".into()),
+        Some(v) => Ok(v),
+    }
 }
 
 #[command]

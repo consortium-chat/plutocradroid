@@ -11,10 +11,6 @@ use crate::schema::transfers::dsl as tdsl;
 use crate::view_schema::balance_history::dsl as bhdsl;
 use crate::models::{UserId,TransferType,AuctionWinner};
 
-// // 4 because all the current types of fungibles (pc, gen, sb)
-// // are under 4 characters
-// type CurrencyIdStr = SmallString<[u8; 4]>;
-
 type CurrencyIdStr = Cow<'static, str>;
 
 #[derive(Debug,Clone,PartialEq,Eq,PartialOrd,Ord,Hash,FromSqlRow,AsExpression)]
@@ -26,15 +22,6 @@ impl std::fmt::Display for CurrencyId {
         write!(f, "{}", self.0)
     }
 }
-
-// pub mod currencies {
-//     use super::CurrencyId;
-
-//     lazy_static! {
-//         pub static ref PC :CurrencyId = CurrencyId("pc".into());
-//         pub static ref GEN:CurrencyId = CurrencyId("gen".into());
-//     }
-// }
 
 impl CurrencyId {
     pub const PC :Self = Self(Cow::Borrowed("pc"));
@@ -148,17 +135,17 @@ impl TransactionBuilder {
         self
     }
 
-    pub fn auction_create(
-        mut self,
-        source: UserId,
-        auction_id: i64,
-    ) -> Self {
-        assert!(self.transfer_ty.is_none());
-        self.auction_id = Some(auction_id);
-        self.source = Some(source);
-        self.transfer_ty = Some(TransferType::AuctionCreate);
-        self
-    }
+    // pub fn auction_create(
+    //     mut self,
+    //     source: UserId,
+    //     auction_id: i64,
+    // ) -> Self {
+    //     assert!(self.transfer_ty.is_none());
+    //     self.auction_id = Some(auction_id);
+    //     self.source = Some(source);
+    //     self.transfer_ty = Some(TransferType::AuctionCreate);
+    //     self
+    // }
 
     pub fn auction_reserve(
         mut self,
@@ -215,13 +202,13 @@ impl TransactionBuilder {
         self
     }
 
-    pub fn comment(
-        mut self,
-        comment: String,
-    ) -> Self {
-        self.comment = Some(comment);
-        self
-    }
+    // pub fn comment(
+    //     mut self,
+    //     comment: String,
+    // ) -> Self {
+    //     self.comment = Some(comment);
+    //     self
+    // }
 }
 
 #[derive(Debug)]

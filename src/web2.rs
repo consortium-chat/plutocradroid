@@ -719,7 +719,11 @@ fn auction_bid(
                     )
                 );
             } else if data.is_max_bid {
-                new_bid = (challenger_id, old_bid.1.checked_add(1).unwrap());
+                if challenger_id == old_bid.0 {
+                    new_bid = old_bid;
+                } else {
+                    new_bid = (challenger_id, old_bid.1.checked_add(1).unwrap());
+                }
                 new_max_bid = Some((challenger_id, data.amount));
                 status_msg = Some(
                     format!(

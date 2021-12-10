@@ -1,13 +1,12 @@
 [package]
 name = "plutocradroid"
-version = "1.1.0-pre1"
+version = "1.1.0"
 authors = ["Shelvacu <shelvacu@gmail.com>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-serenity = "0.10.8"
 diesel = { version = "1.0.0", features = ["postgres", "r2d2", "chrono", "numeric", "extras"] }
 diesel-derive-enum = { version = "1", features = ["postgres"] } 
 dotenv = "0.15.0"
@@ -24,7 +23,6 @@ csv = "1.1"
 rocket = "^0.4"
 rocket_oauth2 = "^0.4"
 log = "0.4.14"
-reqwest = { version = "0.11.4", features = ["blocking","rustls-tls-native-roots"] }
 rand = "0.8.4"
 base64 = "0.13.0"
 maud = { version = "0.23.0", features = ["rocket"] }
@@ -37,6 +35,16 @@ tokio = "1.0.0"
 tokio-diesel = { git = "https://github.com/mehcode/tokio-diesel", rev = "f4af425" }
 futures = "0.3.15"
 phf = { version = "0.10", features = ["macros"] }
+
+[dependencies.serenity]
+version = "0.10.8"
+default-features = false
+features = ["default_no_backend", "rustls_backend"]
+
+[dependencies.reqwest]
+version = "0.11.7"
+default-features = false
+features = ["blocking", "rustls-tls-webpki-roots"]
 
 [build-dependencies]
 vergen = "5"
