@@ -948,6 +948,9 @@ pub fn vote_common(
 ) -> Cow<'static, str> {
     trace!("vote_common");
     let now = chrono::Utc::now();
+    if vote_count < 0 {
+        return Cow::Borrowed("Can not vote a negative number of times.");
+    }
     let mut fail:Option<&'static str> = None;
     let mut outer_cost:Option<i64> = None;
     let mut outer_motion_id:Option<i64> = None;
@@ -1037,12 +1040,21 @@ pub fn vote_common(
                 }
                 outer_direction = Some(outer_dir);
 
+                let ordinal_start = voted_so_far + 1;
+                let ordinal_end = match (voted_so_far + 1).checked_add(vote_count) {
+                    Some(v) => v,
+                    None => {
+                        fail = Some("Overflow");
+                        return Err(diesel::result::Error::RollbackTransaction);
+                    }
+                };
+
                 //dbg!(&voted_so_far, &outer_dir, &vote_count);
                 let mut cost:i64 = 0;
-                outer_vote_ordinal_start = Some(voted_so_far + 1);
-                outer_vote_ordinal_end = Some(voted_so_far + vote_count + 1);
+                outer_vote_ordinal_start = Some(ordinal_start);
+                outer_vote_ordinal_end = Some(ordinal_end);
                 let mut do_fail = false;
-                for nth in voted_so_far+1..voted_so_far+vote_count+1 {
+                for nth in ordinal_start..ordinal_end {
                     //effectively:
                     //cost += nth_vote_cost(nth).unwrap();
                     if let Ok(this_vote_cost) = nth_vote_cost(nth) {
