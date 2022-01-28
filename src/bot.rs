@@ -201,6 +201,7 @@ pub static KNOWN_NAMES: phf::Map<u64, &'static str> = phf::phf_map! {
     182663630280589312u64 => "Azure",
     189620154122895360u64 => "Leeli",
     240939050360504320u64 => "InvisiBrony",
+    271540455584301057u64 => "Anthony",
     373610438560317441u64 => "Matt",
 };
 
