@@ -122,6 +122,41 @@ struct BidForm {
 }
 
 #[derive(Debug, Clone)]
+struct GiveDestination {
+    expected_name: Option<String>,
+    id: models::UserId,
+}
+
+use rocket::http::RawStr;
+use std::str::FromStr;
+impl<'v> rocket::request::FromFormValue<'v> for GiveDestination {
+    type Error = &'v RawStr;
+
+    fn from_form_value(form_value: &'v RawStr) -> Result<Self, Self::Error> {
+        let s = <String as rocket::request::FromFormValue>::from_form_value(form_value)?;
+        dbg!(&s);
+        let c = match crate::GIVE_DESTINATION_RE.captures(s.as_str()) {
+            Some(v) => v,
+            None => return Err(form_value),
+        };
+        dbg!(&c);
+        let expected_name = c.get(1).map(|v| v.as_str().to_string());
+        let id_str = c.get(2).ok_or(form_value)?;
+        let id:models::UserId = i64::from_str(id_str.as_str()).map_err(|_| form_value)?.try_into().map_err(|_| form_value)?;
+        dbg!();
+        Ok(Self{expected_name, id})
+    }
+}
+
+#[derive(Debug, Clone, FromForm)]
+struct GiveForm {
+    csrf: String,
+    quantity: i64,
+    ty: String,
+    destination: GiveDestination,
+}
+
+#[derive(Debug, Clone)]
 struct MiscError(String);
 
 impl Display for MiscError {
@@ -439,6 +474,10 @@ fn page(ctx: &mut CommonContext, title: impl AsRef<str>, content: Markup) -> Mar
                         " | "
                     }
                     a href="/my-transactions" { "My Transactions" }
+                    span role="separator" aria-orientation="vertical" {
+                        " | "
+                    }
+                    a href="/give" { "Transfer" }
                 }    
             }
             hr;
@@ -530,6 +569,148 @@ fn display_auction(auction:&AuctionWinner) -> Markup {
 enum RocketIsDumb {
     S(rocket::http::Status),
     M(Markup),
+}
+
+#[get("/give")]
+fn give_form(
+    mut ctx: CommonContext
+) -> Markup {
+    if ctx.deets.is_none() {
+        return page(&mut ctx, "Log in to give", html!{
+            "You're not logged in; Please log in to transfer fungibles"
+        });
+    }
+
+    use schema::item_types::dsl as itdsl;
+
+    let item_types:Vec<models::ItemType> = itdsl::item_types
+        .select(models::ItemType::cols())
+        .order(itdsl::position)
+        .get_results(&*ctx)
+        .unwrap();
+
+    let csrf = ctx.csrf_token.clone();
+
+    page(&mut ctx, "Give", html!{
+        datalist id="known_users" {
+            @for (discord_id,name) in crate::bot::KNOWN_NAMES.entries() {
+                option {
+                    (name) " - " (discord_id)
+                }
+            }
+        }
+        form action="/give" method="post" {
+            input type="hidden" name="csrf" value=(csrf);
+            "Give"
+            br;
+            input type="number" min="1" name="quantity" placeholder="2331";
+            br;
+            select name="ty" {
+                @for it in item_types {
+                    option value=(it.id) { (it.long_name_ambiguous) }
+                }
+            }
+            br;
+            "to"
+            br;
+            input name="destination" type="text" list="known_users" pattern="(\\w+\\s*-\\s*)?\\d+" id="transfer_destination_input";
+            br;
+            "Type a discord snowflake id here, or start typing a name and select from the list. "
+            b { "Be careful" } 
+            "; Pluto has no way to verify an id is valid, and will transfer to any id if asked even if it doesn't exist."
+            br;
+            br;
+            button type="submit" {
+                "Send (no backsies)"
+            }
+        }
+    })
+}
+
+#[post("/give", data = "<data>")]
+fn give_perform(
+    mut ctx: CommonContext,
+    data: LenientForm<GiveForm>,
+) -> RocketIsDumb {
+    let now = Utc::now();
+
+    if ctx.cookies.get(CSRF_COOKIE_NAME).map(|token| token.value()) != Some(data.csrf.as_str()) {
+        return RocketIsDumb::S(rocket::http::Status::BadRequest);
+    }
+
+    if data.quantity < 0 {
+        return RocketIsDumb::S(rocket::http::Status::BadRequest);
+    }
+
+    let deets = if let Some(ref d) = ctx.deets { d } else { return RocketIsDumb::S(rocket::http::Status::BadRequest); };
+
+    use schema::item_types::dsl as itdsl;
+    let maybe_ty:Option<models::ItemType> = itdsl::item_types
+        .select(models::ItemType::cols())
+        .filter(itdsl::name.eq(data.ty.as_str()))
+        .get_result(&*ctx)
+        .optional()
+        .unwrap();
+    
+    let ty = match maybe_ty {
+        Some(v) => v,
+        None => return RocketIsDumb::S(rocket::http::Status::BadRequest),
+    };
+
+    if let Some(ref name) = data.destination.expected_name {
+        let maybe_known_name = crate::bot::KNOWN_NAMES.get(&(data.destination.id.into_u64()));
+        if let Some(known_name) = maybe_known_name {
+            if *known_name != name.as_str() {
+                return RocketIsDumb::M(page(&mut ctx, "Failed transfer", html!{ "Failed: The name \"" (name) "\" does not match the name on record, \"" (known_name) "\"."}));
+            } // else it matches, all is well
+        } else {
+            return RocketIsDumb::M(page(&mut ctx, "Failed transfer", html!{ "Failed: The name \"" (name) "\" is not known."}));
+        }
+    }
+
+    let t = transfers::TransactionBuilder::new(
+        data.quantity,
+        ty.id,
+        now
+    ).give( 
+        deets.id(),
+        data.destination.id,
+        false
+    );
+
+    let mut res = None;
+    ctx.conn.transaction::<_,diesel::result::Error,_>(|| {
+        match transfers::TransferHandler::handle_single(&*ctx, t) {
+            Err(transfers::TransferError::NotEnough) => {
+                res = Some(RocketIsDumb::M(bare_page("Failed transfer", html!{ "Failed: You do not have enough."})));
+            },
+            Err(transfers::TransferError::Overflow) => {
+                res = Some(RocketIsDumb::M(bare_page("Failed transfer", html!{ "Failed: Overflow."})));
+            },
+            Ok(v) => v.unwrap(),
+        }
+
+        Ok(())
+    }).unwrap();
+
+    if let Some(res) = res { return res }
+
+    RocketIsDumb::M(page(&mut ctx, "Successfully transferred", html!{
+        "Success: Transferred "
+        (data.quantity)
+        " "
+        (ty.long_name_ambiguous)
+        " to "
+        @if let Some(ref name) = data.destination.expected_name {
+            (name) " (id " (data.destination.id) ")"
+        } @else {
+            "id " (data.destination.id)
+        }
+        "."
+        br;
+        br;
+        a href="/give" { "Transfer some more" }
+    }))
 }
 
 #[post("/auctions/<damm_id>/bid", data = "<data>")]
@@ -1790,6 +1971,8 @@ pub fn main() {
             auction_bid,
             auction_view,
             shortlink,
+            give_form,
+            give_perform,
         ])
         .launch();
 }

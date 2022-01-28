@@ -69,6 +69,12 @@ impl UserId {
     }
 }
 
+impl std::fmt::Display for UserId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        <u64 as std::fmt::Display>::fmt(&self.0, f)
+    }
+}
+
 impl From<UserId> for serenity::model::id::UserId {
     fn from(v: UserId) -> serenity::model::id::UserId {
         v.into_serenity()
@@ -212,7 +218,7 @@ impl MotionVote {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Queryable)]
-pub struct ItemType{
+pub struct ItemType {
     pub id: CurrencyId,
     pub long_name_plural: String,
     pub long_name_ambiguous: String,

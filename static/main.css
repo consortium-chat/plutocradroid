@@ -144,3 +144,7 @@ input[type=radio] {
     height: 0;
     visibility: hidden;
 }
+
+#transfer_destination_input {
+    width: 100%;
+}

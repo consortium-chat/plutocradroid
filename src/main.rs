@@ -49,12 +49,17 @@ lazy_static! {
     pub static ref AUTO_AUCTION_EVERY:chrono::Duration = chrono::Duration::days(7);
 }
 
+lazy_static! {
+    pub static ref GIVE_DESTINATION_RE:regex::Regex = regex::Regex::new(r"^(?:([^\-\s]+)\s*-\s*)?(\d+)$").unwrap();
+}
+
 fn main() {
     lazy_static::initialize(&GENERATE_EVERY);
     lazy_static::initialize(&MOTION_EXPIRATION);
     lazy_static::initialize(&AUCTION_EXPIRATION);
     lazy_static::initialize(&AUTO_AUCTION_AT);
     lazy_static::initialize(&AUTO_AUCTION_EVERY);
+    lazy_static::initialize(&GIVE_DESTINATION_RE);
     dotenv::dotenv().unwrap();
 
     //Die on error
