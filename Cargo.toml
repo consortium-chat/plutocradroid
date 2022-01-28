@@ -7,7 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-diesel = { version = "1.0.0", features = ["postgres", "r2d2", "chrono", "numeric", "extras"] }
+diesel = { version = "1.0.0", features = ["postgres", "uuid", "r2d2", "chrono", "numeric", "extras"] }
 diesel-derive-enum = { version = "1", features = ["postgres"] } 
 dotenv = "0.15.0"
 lazy_static = "*"
@@ -35,6 +35,7 @@ tokio = "1.0.0"
 tokio-diesel = { git = "https://github.com/mehcode/tokio-diesel", rev = "f4af425" }
 futures = "0.3.15"
 phf = { version = "0.10", features = ["macros"] }
+uuid = { version = ">=0.7.0, <0.9.0", features = ["v4"] }
 
 [dependencies.serenity]
 version = "0.10.8"
