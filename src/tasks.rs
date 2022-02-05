@@ -36,7 +36,7 @@ pub async fn create_auto_auctions(
                     adsl::created_at.eq(now),
                     adsl::auctioneer.eq(None:Option<i64>),
                     adsl::offer_ty.eq("gen"),
-                    adsl::offer_amt.eq(1i64),
+                    adsl::offer_amt.eq(10i64),
                     adsl::bid_ty.eq("pc"),
                     adsl::bid_min.eq(1i64),
                     adsl::last_timer_bump.eq(now),
@@ -48,7 +48,7 @@ pub async fn create_auto_auctions(
 
             serenity::model::id::ChannelId::from(bot::MOTIONS_CHANNEL).send_message(cnh.http(), |m| {
                 m.content(format!(
-                    "New auction#{0} started! The Consortium offers 1 gen for bids in pc. Visit <{1}/auctions/{0}> to bid.",
+                    "New auction#{0} started! The Consortium offers 10 gens for bids in pc. Visit <{1}/auctions/{0}> to bid.",
                     damm::add_to_str(auction_id.to_string()),
                     crate::SITE_URL,
                 ))

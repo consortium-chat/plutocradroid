@@ -1380,7 +1380,7 @@ checksum = "d1a3ea4f0dd7f1f3e512cf97bf100819aa547f36a6eccac8dbaae839eb92363e"
 
 [[package]]
 name = "plutocradroid"
-version = "1.2.0"
+version = "1.2.2"
 dependencies = [
  "async-trait",
  "atoi",
