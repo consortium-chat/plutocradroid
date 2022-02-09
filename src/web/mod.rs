@@ -4,7 +4,6 @@ mod bank;
 mod common_context;
 mod csrf;
 mod deets;
-mod give;
 mod misc_error;
 mod motions;
 mod prelude;

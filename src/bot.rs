@@ -641,6 +641,7 @@ async fn give_common(ctx:&Context, msg:&Message, mut args:Args, check_user:bool)
     Ok(())
 }
 
+#[allow(dead_code)] //Some strange bug means rust thinks this func isn't used, even when it definitely is.
 async fn find_item_type(pool: &DbPool, ty_str:String) -> CommandResult<ItemType> {
     use diesel::prelude::*;
     use schema::item_types::dsl as it;
