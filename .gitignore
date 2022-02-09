@@ -1,4 +1,4 @@
 /target
 .env
-src/statics.rs
+src/web/statics.rs
 pluto-beta-dump.sql

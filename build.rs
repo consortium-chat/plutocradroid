@@ -35,12 +35,12 @@ fn static_gen() {
 
 #[get("/{}")]
 fn {}() -> impl Responder<'static> {{
-    LongLived(Content(ContentType::from_extension("{}").unwrap(), &include_bytes!("../static/{}")[..]))
+    LongLived(Content(ContentType::from_extension("{}").unwrap(), &include_bytes!("../../static/{}")[..]))
 }}
 
 #[get("/{}")]
 fn {}() -> impl Responder<'static> {{
-    Tagged("{}".into(), Content(ContentType::from_extension("{}").unwrap(), &include_bytes!("../static/{}")[..]))
+    Tagged("{}".into(), Content(ContentType::from_extension("{}").unwrap(), &include_bytes!("../../static/{}")[..]))
 }}"#,
             &hashname,
             &hash_fn_name,
@@ -76,8 +76,9 @@ fn {}() -> impl Responder<'static> {{
 "#, filename, hashname));
     }
     statics_rs.push_str("}\n");
+    statics_rs.push_str("\npub(crate) use static_path;\n");
 
-    fs::write("src/statics.rs", statics_rs).unwrap();
+    fs::write("src/web/statics.rs", statics_rs).unwrap();
 }
 
 fn main() {

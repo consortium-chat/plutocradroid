@@ -7,22 +7,20 @@
 #[macro_use] extern crate maplit;
 #[macro_use] extern crate serde;
 
-#[macro_use] mod statics;
 
 mod models;
 #[allow(unused_imports)]
 mod schema;
 mod view_schema;
 mod damm;
-mod rocket_diesel;
 mod bot;
-mod web2;
 mod is_win;
-mod static_responders;
 mod worker;
 mod tasks;
 mod fix_transactions;
 mod transfers;
+mod web;
+mod names;
 
 use std::{env,panic,process};
 
@@ -71,15 +69,15 @@ fn main() {
     }));
 
     env_logger::init();
-    if env::var_os("RUN_BOT") == Some("1".into()) {
+    if env::var_os("RUN_BOT") == Some("1".into()) || env::var_os("RUN") == Some("bot".into()) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(bot::bot_main());
-    } else if env::var_os("RUN_WEB2") == Some("1".into()) {
-        web2::main();
-    } else if env::var_os("RUN_WORKER") == Some("1".into()) {
+    } else if env::var_os("RUN_WEB2") == Some("1".into())|| env::var_os("RUN") == Some("web".into())  {
+        web::main();
+    } else if env::var_os("RUN_WORKER") == Some("1".into())|| env::var_os("RUN") == Some("worker".into())  {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(worker::main());
-    } else if env::var_os("RUN_FIX_TRANSACTIONS") == Some("1".into()) {
+    } else if env::var_os("RUN_FIX_TRANSACTIONS") == Some("1".into())|| env::var_os("RUN") == Some("fix_transactions".into())  {
         fix_transactions::fix_transactions();
     } else {
         eprintln!("Must specify RUN_BOT=1, RUN_WEB2=1, or RUN_WORKER=1");

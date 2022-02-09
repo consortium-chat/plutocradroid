@@ -192,28 +192,6 @@ impl EventHandler for Handler {
     }
 }
 
-pub static KNOWN_NAMES: phf::Map<u64, &'static str> = phf::phf_map! {
-    125003180219170816u64 => "Colin",
-    155438323354042368u64 => "Ben",
-    165858230327574528u64 => "Shelvacu",
-    175691653770641409u64 => "DDR",
-    173650493145350145u64 => "Sparks",
-    182663630280589312u64 => "Azure",
-    189620154122895360u64 => "Leeli",
-    240939050360504320u64 => "InvisiBrony",
-    271540455584301057u64 => "Anthony",
-    373610438560317441u64 => "Matt",
-};
-
-pub fn name_of(u:SerenityUserId) -> Cow<'static, str> {
-    trace!("name_of");
-    if let Some(name) = KNOWN_NAMES.get(&u.0) {
-        (*name).into()
-    } else {
-        u.0.to_string().into()
-    }
-}
-
 fn nth_vote_cost(n:i64) -> Result<i64,()> {
     trace!("nth_vote_cost");
     let res:f64 = (VOTE_BASE_COST as f64) * (1.05f64).powf((n-1) as f64);
@@ -355,7 +333,7 @@ pub async fn update_motion_message(
                 e.field("Votes", format!("**against {}**/{} for", no_votes, yes_votes), false);
             }
             for vote in &votes[0..std::cmp::min(votes.len(),21)] {
-                e.field(name_of(vote.user.into_serenity()), format!("{} {}", vote.amount, if vote.direction {"for"} else {"against"}), true);
+                e.field(crate::names::name_of(vote.user.into_serenity()), format!("{} {}", vote.amount, if vote.direction {"for"} else {"against"}), true);
             }
 
             if votes.len() > 21 {
@@ -726,7 +704,7 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
         )).embed(|e| {
             e.field(cap_label, motion_text, false)
             .field("Votes", "**for 1**/0 against", false)
-            .field(name_of(msg.author.id), "1 for", true)
+            .field(crate::names::name_of(msg.author.id), "1 for", true)
         })
     }).await?;
 
