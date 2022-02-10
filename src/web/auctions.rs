@@ -66,13 +66,12 @@ pub fn auction_bid(
     damm_id: String,
 ) -> PlutoResponse {
     let now = Utc::now();
-    let id:i64;
-    if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
-        id = atoi::atoi(digits.as_slice()).unwrap();
+    let id:i64 = if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
+        atoi::atoi(digits.as_slice()).unwrap()
     } else {
         info!("bad id");
         return hard_err(rocket::http::Status::NotFound);
-    }
+    };
     if ctx.cookies.get(CSRF_COOKIE_NAME).map(|token| token.value()) != Some(data.csrf.as_str()) {
         return hard_err(rocket::http::Status::BadRequest);
     }
@@ -126,12 +125,7 @@ pub fn auction_bid(
             return Ok(());
         }
 
-        // if Some(deets.id()) == auction.winner_id {
-        //     fail_msg = Some("Bid failed: You cannot increase your own bid.");
-        //     return Ok(());
-        // }
-        let mut to_lock = vec![];
-        to_lock.push(deets.id());
+        let mut to_lock = vec![deets.id()];
         if let Some(prev_bidder) = auction.winner_id {
             if prev_bidder != deets.id() {
                 to_lock.push(prev_bidder);
@@ -158,7 +152,7 @@ pub fn auction_bid(
             status_msg = Some(
                 format!(
                     "Bid failed: You do not have enough {}",
-                    auction.bid_ty.clone()
+                    auction.bid_ty
                 )
             );
             return Ok(());
@@ -364,12 +358,11 @@ pub fn auction_view(
     damm_id: String,
     mut ctx: CommonContext,
 ) -> PlutoResponse {
-    let id:i64;
-    if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
-        id = atoi::atoi(digits.as_slice()).unwrap();
+    let id:i64 = if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
+        atoi::atoi(digits.as_slice()).unwrap()
     } else {
         return not_found();
-    }
+    };
     use crate::models::AuctionWinner;
     use crate::view_schema::auction_and_winner::dsl as anw;
     use crate::schema::transfers::dsl as tdsl;
@@ -381,12 +374,11 @@ pub fn auction_view(
     .optional()
     .unwrap();
 
-    let auction;
-    if let Some(a) = maybe_auction {
-        auction = a;
+    let auction = if let Some(a) = maybe_auction {
+        a
     } else {
         return not_found();
-    }
+    };
     let transaction_history:Vec<Transfer> = tdsl::transfers
         .select(Transfer::cols())
         .filter(tdsl::auction_id.eq(auction.auction_id))

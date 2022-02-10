@@ -196,7 +196,7 @@ pub async fn process_motion_completions(
         .filter(mdsl::announcement_message_id.is_null())
         .filter(mdsl::last_result_change.lt(now - *crate::MOTION_EXPIRATION))
         .select((mdsl::motion_text, mdsl::rowid, mdsl::is_super))
-        .get_results_async(&pool).await?;
+        .get_results_async(pool).await?;
     for (motion_text, motion_id, is_super) in &motions {
         #[derive(Queryable,Debug)]
         struct MotionVote {
@@ -206,7 +206,7 @@ pub async fn process_motion_completions(
         let votes:Vec<MotionVote> = mvdsl::motion_votes
             .select((mvdsl::amount, mvdsl::direction))
             .filter(mvdsl::motion.eq(motion_id))
-            .get_results_async(&pool).await?;
+            .get_results_async(pool).await?;
         let mut yes_votes = 0;
         let mut no_votes = 0;
         for vote in &votes {
@@ -240,17 +240,17 @@ pub async fn process_motion_completions(
 
         diesel::update(mdsl::motions.filter(mdsl::rowid.eq(motion_id))).set(
             mdsl::announcement_message_id.eq(announce_msg.id.0 as i64)
-        ).execute_async(&pool).await?;
+        ).execute_async(pool).await?;
     }
 
     let mmids:Vec<i64> = mdsl::motions
         .filter(mdsl::announcement_message_id.is_null())
         .filter(mdsl::needs_update)
         .select(mdsl::bot_message_id)
-        .get_results_async(&pool).await?;
+        .get_results_async(pool).await?;
     for mmid in &mmids {
         let mut motion_message = cnh.http().get_message(bot::MOTIONS_CHANNEL, *mmid as u64).await?;
-        bot::update_motion_message(cnh, Arc::clone(&pool), &mut motion_message).await?;
+        bot::update_motion_message(cnh, Arc::clone(pool), &mut motion_message).await?;
     }
     Ok(())
 }

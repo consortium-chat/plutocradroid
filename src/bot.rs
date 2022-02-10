@@ -421,13 +421,12 @@ async fn fabricate(ctx: &Context, msg: &Message, mut args: Args) -> CommandResul
     if how_many <= 0 {
         return Err("fuck".into());
     }
-    let user:SerenityUserId;
-    if args.remaining() > 0 {
+    let user:SerenityUserId = if args.remaining() > 0 {
         let user_str = args.single()?:String;
-        user = SerenityUserId::from_command_args(ctx, msg, &user_str).await?;
+        SerenityUserId::from_command_args(ctx, msg, &user_str).await?
     }else{
-        user = msg.author.id;
-    }
+        msg.author.id
+    };
 
     pool.transaction(|txn| {
         let mut handle = TransferHandler::new(
@@ -1094,15 +1093,14 @@ pub fn vote_common(
                 let mut no_votes = get_vote_count(false)?;
                 //dbg!(&yes_votes, &no_votes);
                 
-                let result_before:bool;
-                let result_after:bool;
-                result_before = is_win(yes_votes, no_votes, is_super);
+
+                let result_before = is_win(yes_votes, no_votes, is_super);
                 if outer_dir {
                     yes_votes += vote_count;
                 }else{
                     no_votes += vote_count;
                 }
-                result_after = is_win(yes_votes, no_votes, is_super);
+                let result_after = is_win(yes_votes, no_votes, is_super);
 
                 diesel::update(
                     mvdsl::motion_votes.filter(mvdsl::motion.eq(motion_id)).filter(mvdsl::user.eq(user_id))

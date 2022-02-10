@@ -228,12 +228,11 @@ pub fn motion_view(
     mut ctx: CommonContext,
     damm_id: String
 ) -> PlutoResponse {
-    let id:i64;
-    if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
-        id = atoi::atoi(digits.as_slice()).unwrap();
+    let id:i64 = if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
+        atoi::atoi(digits.as_slice()).unwrap()
     } else {
         return not_found();
-    }
+    };
 
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
@@ -245,12 +244,11 @@ pub fn motion_view(
         .optional()
         .unwrap();
     
-    let motion;
-    if let Some(m) = maybe_motion {
-        motion = m;
+    let motion = if let Some(m) = maybe_motion {
+        m
     }else{
         return not_found();
-    }
+    };
 
     let votes:Vec<MotionVote> = mvdsl::motion_votes
         .select(MotionVote::cols())
@@ -322,11 +320,11 @@ pub fn motion_view(
                         format!(
                             "Voted {} this motion {} time(s).",
                             if vote_directions[&from.user] {
-                                "in favor"
+                                "in favor of"
                             } else {
                                 "against"
                             },
-                            (format!("{}",votes))
+                            votes
                         )
                     }
                 ))
@@ -415,23 +413,21 @@ pub fn motion_vote(
     data: LenientForm<VoteForm>,
     damm_id: String,
 ) -> PlutoResponse {
-    let id:i64;
-    if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
-        id = atoi::atoi(digits.as_slice()).unwrap();
+    let id = if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
+        atoi::atoi(digits.as_slice()).unwrap()
     } else {
         info!("bad id");
         return not_found();
-    }
+    };
     if ctx.cookies.get(CSRF_COOKIE_NAME).map(|token| token.value()) != Some(data.csrf.as_str()) {
         return hard_err(Status::BadRequest);
     }
-    let deets:&Deets;
-    if let Some(d) = ctx.deets.as_ref() {
-        deets = d;
+    let deets:&Deets = if let Some(d) = ctx.deets.as_ref() {
+        d
     } else {
         info!("no deets");
         return hard_err(Status::Unauthorized);
-    }
+    };
     let vote_count = data.count;
     let vote_direction:bool;
     if data.direction.as_str() == "for" {

@@ -290,77 +290,47 @@ impl<'a> TransferHandler<'a> {
         &mut self,
         transfer: TransactionBuilder,
     ) -> Result<diesel::QueryResult<()>, TransferError> {
-        self.transfer_impl(
-            transfer.currency_ty,
-            transfer.source,
-            transfer.quantity,
-            transfer.dest,
-            transfer.message_id,
-            transfer.to_motion,
-            transfer.to_votes,
-            transfer.comment,
-            transfer.transfer_ty.unwrap(),
-            transfer.auction_id,
-            transfer.happened_at,
-            false,
-        )
-    }
-
-    fn transfer_impl(
-        &mut self,
-        ty: CurrencyId,
-        maybe_from_user: Option<UserId>,
-        quantity: i64,
-        maybe_to_user: Option<UserId>,
-        message_id: Option<i64>,
-        to_motion: Option<i64>,
-        to_votes: Option<i64>,
-        comment: Option<String>,
-        transfer_ty: crate::models::TransferType,
-        auction_id: Option<i64>,
-        happened_at: DateTime<Utc>,
-        force: bool,
-    ) -> Result<diesel::QueryResult<()>, TransferError> {
+        assert!(transfer.transfer_ty.is_some());
         let mut maybe_from_balance = None;
-        if let Some(from_user) = maybe_from_user {
-            let old_bal = self.users_balances[&(from_user, ty.clone())];
-            if !force && old_bal < quantity {
+        if let Some(from_user) = transfer.source {
+            let old_bal = self.users_balances[&(from_user, transfer.currency_ty.clone())];
+            if old_bal < transfer.quantity {
                 return Err(TransferError::NotEnough);
             }
-            let new_balance = match old_bal.checked_sub(quantity) {
+            let new_balance = match old_bal.checked_sub(transfer.quantity) {
                 Some(v) => v,
                 None => return Err(TransferError::Overflow),
             };
-            self.users_balances.insert((from_user, ty.clone()), new_balance).unwrap();
+            self.users_balances.insert((from_user, transfer.currency_ty.clone()), new_balance).unwrap();
             maybe_from_balance = Some(new_balance);
         }
         let mut maybe_to_balance = None;
-        if let Some(to_user) = maybe_to_user {
-            let old_bal = self.users_balances[&(to_user, ty.clone())];
-            let new_balance = match old_bal.checked_add(quantity) {
+        if let Some(to_user) = transfer.dest {
+            let old_bal = self.users_balances[&(to_user, transfer.currency_ty.clone())];
+            let new_balance = match old_bal.checked_add(transfer.quantity) {
                 Some(v) => v,
                 None => return Err(TransferError::Overflow),
             };
-            self.users_balances.insert((to_user, ty.clone()), new_balance);
+            self.users_balances.insert((to_user, transfer.currency_ty.clone()), new_balance);
             maybe_to_balance = Some(new_balance);
         }
         
         Ok(
             diesel::insert_into(tdsl::transfers)
                 .values((
-                    tdsl::ty.eq(ty),
-                    tdsl::from_user.eq(maybe_from_user),
+                    tdsl::ty.eq(transfer.currency_ty),
+                    tdsl::from_user.eq(transfer.source),
                     tdsl::from_balance.eq(maybe_from_balance),
-                    tdsl::quantity.eq(quantity),
-                    tdsl::to_user.eq(maybe_to_user),
+                    tdsl::quantity.eq(transfer.quantity),
+                    tdsl::to_user.eq(transfer.dest),
                     tdsl::to_balance.eq(maybe_to_balance),
-                    tdsl::message_id.eq(message_id),
-                    tdsl::to_motion.eq(to_motion),
-                    tdsl::to_votes.eq(to_votes),
-                    tdsl::comment.eq(comment),
-                    tdsl::transfer_ty.eq(transfer_ty),
-                    tdsl::auction_id.eq(auction_id),
-                    tdsl::happened_at.eq(happened_at),
+                    tdsl::message_id.eq(transfer.message_id),
+                    tdsl::to_motion.eq(transfer.to_motion),
+                    tdsl::to_votes.eq(transfer.to_votes),
+                    tdsl::comment.eq(transfer.comment),
+                    tdsl::transfer_ty.eq(transfer.transfer_ty.unwrap()),
+                    tdsl::auction_id.eq(transfer.auction_id),
+                    tdsl::happened_at.eq(transfer.happened_at),
                 ))
                 .execute(self.conn)
                 .map(|_| ())

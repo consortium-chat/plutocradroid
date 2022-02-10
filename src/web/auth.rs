@@ -69,12 +69,11 @@ pub fn oauth_finish(token: TokenResponse<DiscordOauth>, mut cookies: Cookies<'_>
 pub fn get_deets(
     mut cookies: Cookies<'_>
 ) -> Result<Redirect, template::ErrorResponse> {
-    let token;
-    if let Some(val) = cookies.get_private("token") {
-        token = val.value().to_string()
+    let token = if let Some(val) = cookies.get_private("token") {
+        val.value().to_string()
     } else {
         return template::hard_err(Status::BadRequest);
-    }
+    };
     let client = reqwest::blocking::Client::new();
     let res = client.get("https://discord.com/api/v8/users/@me")
         .bearer_auth(token)

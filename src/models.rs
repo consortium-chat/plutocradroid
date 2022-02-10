@@ -297,7 +297,7 @@ impl AuctionWinner {
     pub fn end_at(&self) -> DateTime<Utc> { self.last_timer_bump + *crate::AUCTION_EXPIRATION }
     pub fn damm(&self) -> String { crate::damm::add_to_str(self.auction_id.to_string()) }
     pub fn auctioneer_name(&self) -> Cow<'static, str> {
-        self.auctioneer.map(|a| crate::names::name_of(serenity::model::id::UserId::from(a as u64))).unwrap_or("The CONsortium".into())
+        self.auctioneer.map(|a| crate::names::name_of(serenity::model::id::UserId::from(a as u64))).unwrap_or_else(|| "The CONsortium".into())
     }
     pub fn winner(&self) -> Option<(UserId, i64)> {
         self.winner_id.map(|winner| (winner, self.winner_bid.unwrap()))

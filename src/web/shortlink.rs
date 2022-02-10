@@ -8,12 +8,11 @@ pub fn shortlink(
     damm_id: String,
     ctx: CommonContext,
 ) -> Option<Redirect> {
-    let id:i64;
-    if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
-        id = atoi::atoi(digits.as_slice()).unwrap();
+    let id:i64 = if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
+        atoi::atoi(digits.as_slice()).unwrap()
     } else {
         return None;
-    }
+    };
 
     use schema::motions::dsl as mdsl;
     use schema::auctions::dsl as adsl;
