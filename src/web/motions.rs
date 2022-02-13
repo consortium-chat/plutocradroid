@@ -42,6 +42,8 @@ impl Default for MotionFilter {
     }
 }
 
+impl rocket::http::uri::Ignorable<rocket::http::uri::Query> for MotionFilter {}
+
 impl<'q> FromQuery<'q> for MotionFilter {
     type Error = !;
     fn from_query(q: Query<'q>) -> Result<Self, Self::Error> {

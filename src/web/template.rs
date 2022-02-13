@@ -161,20 +161,20 @@ pub fn page<E, T: AsRef<str>>(
         header {
             (top_content)
             nav {
-                a href="/" { "Motions" }
+                a href=(uri!(super::motions::motion_index: _)) { "Motions" }
                 span role="separator" aria-orientation="vertical" {
                     " | "
                 }
-                a href="/auctions" { "Auctions" }
+                a href=(uri!(super::auctions::auction_index)) { "Auctions" }
                 @if ctx.deets.is_some() {
                     span role="separator" aria-orientation="vertical" {
                         " | "
                     }
-                    a href="/my-transactions" { "My Transactions" }
+                    a href=(uri!(super::bank::my_transactions: fun_ty = _, before_ms = _)) { "My Transactions" }
                     span role="separator" aria-orientation="vertical" {
                         " | "
                     }
-                    a href="/give" { "Transfer" }
+                    a href=(uri!(super::bank::give_form)) { "Transfer" }
                 }    
             }
             hr;

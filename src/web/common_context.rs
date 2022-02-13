@@ -1,3 +1,5 @@
+use std::fmt;
+
 use rocket::http::{Cookies,Cookie};
 use rocket::request::{FromRequest, Request, Outcome};
 
@@ -29,6 +31,17 @@ pub struct CommonContext<'a> {
     pub cookies: Cookies<'a>,
     pub deets: Option<Deets>,
     pub conn: super::rocket_diesel::DbConn,
+}
+
+impl<'a> fmt::Debug for CommonContext<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CommonContext")
+          .field("csrf_token", &self.csrf_token)
+          .field("cookies", &self.cookies)
+          .field("deets", &self.deets)
+          .field("conn", &"<undebuggable>")
+          .finish()
+    }
 }
 
 impl<'a> core::ops::Deref for CommonContext<'a> {
