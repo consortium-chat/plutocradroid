@@ -48,8 +48,8 @@ pub fn bare_page(
                 meta name="supported-color-schemes" content="light dark";
 
                 title { (title.as_ref()) }
-                link rel="stylesheet" href={"/" (static_path!(main.css))};
-                link rel="icon" type="image/png" href={"/" (static_path!(favicon.png))};
+                link rel="stylesheet" href={(static_path!(main.css))};
+                link rel="icon" type="image/png" href={(static_path!(favicon.png))};
 
                 (head_content)
             }

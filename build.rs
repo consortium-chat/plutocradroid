@@ -72,7 +72,7 @@ fn {}() -> impl Responder<'static> {{
     statics_rs.push_str("macro_rules! static_path {\n");
     for (filename, hashname, _, _) in &list {
         statics_rs.push_str(&format!(r#"
-    ({}) => {{"{}"}};
+    ({}) => {{"/{}"}};
 "#, filename, hashname));
     }
     statics_rs.push_str("}\n");

@@ -1,4 +1,9 @@
 pub static KNOWN_NAMES: phf::Map<u64, &'static str> = phf::phf_map! {
+    0u64 => "TheOtherPitOfFire",
+    1u64 => "PitOfFire",
+    2u64 => "Dos",
+    3u64 => "Three",
+    4u64 => "Four",
     125003180219170816u64 => "Colin",
     155438323354042368u64 => "Ben",
     165858230327574528u64 => "Shelvacu",
