@@ -474,12 +474,58 @@ pub fn auction_view(
         }
     };
 
+    let meta_title = format!(
+        "Auction#{} for {} {} @ CONsortium MAS",
+        auction.damm(),
+        auction.offer_amt,
+        auction.offer_ty,
+    );
+
+    let meta_description = if auction.finished {
+        if let Some(winner) = auction.winner() {
+            format!(
+                "Auction won by {} paying {} {}.",
+                crate::names::name_of(winner.0),
+                winner.1,
+                auction.bid_ty,
+            )
+        } else {
+            format!(
+                "Auction ended with no bids; Minimum bid was {} {}",
+                auction.bid_min,
+                auction.bid_ty,
+            )
+        }
+    } else if let Some(winner) = auction.winner() {
+        format!(
+            "Current bid is {} {} by {}",
+            winner.1,
+            auction.bid_ty,
+            crate::names::name_of(winner.0),
+        )
+    } else {
+        format!(
+            "No bids; Minimum bid is {} {}",
+            auction.bid_min,
+            auction.bid_ty,
+        )
+    };
+
     page(
         &mut ctx,
         PageTitle(format!("Auction#{}",damm_id)),
-        full_url(uri!(auction_view: damm_id = damm_id)).into(),
+        full_url(uri!(auction_view: damm_id = &damm_id)).into(),
         html!{
-            //todo: add meta tags
+            meta property="og:title" content=(meta_title);
+            meta property="og:description" content=(meta_description);
+            meta property="og:type" content="website";
+            meta property="og:image" content=(super::statics::static_path!(favicon.png)); //TODO: Autogenerate informational icon
+            meta property="og:image:alt" content="Cube inside a large C";
+            meta property="og:url" content=(full_url(uri!(auction_view: damm_id = &damm_id)));
+            meta property="og:site_name" content="CONsortium MAS";
+
+            meta name="twitter:card" content="summary";
+
             link rel="index" href=(uri!(auction_index));
         },
         content

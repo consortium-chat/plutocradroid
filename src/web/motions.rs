@@ -77,6 +77,59 @@ impl<'q> FromQuery<'q> for MotionFilter {
     }
 }
 
+fn motion_meta_description(motion: &crate::models::MotionWithCount) -> String {
+    let result = if motion.announcement_message_id.is_some() {
+        format!(
+            "{} at ",
+            if motion.is_win {
+                "PASSED"
+            } else {
+                "FAILED"
+            }
+        )
+    } else {
+        format!(
+            "will {} at ",
+            if motion.is_win {
+                "pass"
+            } else {
+                "fail"
+            }
+        )
+    };
+    let votes = if motion.is_win {
+        format!(
+            "{} for vs {} against",
+            motion.yes_vote_count,
+            motion.no_vote_count,
+        )
+    } else {
+        format!(
+            "{} against vs {} for",
+            motion.yes_vote_count,
+            motion.no_vote_count,
+        )
+    };
+
+    let motion_text = format!(
+        "{} {}",
+        if motion.is_super {
+            "Super motion"
+        } else {
+            "Simple motion"
+        },
+        motion.motion_text
+    );
+
+    format!(
+        "{}{} with votes {}\n{}",
+        result,
+        super::template::show_ts(motion.end_at()).0,
+        votes,
+        motion_text,
+    )
+}
+
 #[allow(clippy::branches_sharing_code)]
 fn motion_snippet(
     motion: &crate::models::MotionWithCount
@@ -398,13 +451,26 @@ pub fn motion_view(
         }
     };
 
+    let meta_title = format!("Motion #{} @ CONsortium MAS", motion.damm_id());
+    
+    let meta_description = motion_meta_description(&motion);
+
     page(
         &mut ctx,
         PageTitle(format!("Motion #{}", motion.damm_id())),
-        full_url(uri!(motion_view: damm_id = damm_id)).into(),
+        full_url(uri!(motion_view: damm_id = &damm_id)).into(),
         html!{
+            meta property="og:title" content=(meta_title);
+            meta property="og:description" content=(meta_description);
+            meta property="og:type" content="website";
+            meta property="og:image" content=(super::statics::static_path!(favicon.png)); //TODO: Autogenerate informational icon
+            meta property="og:image:alt" content="Cube inside a large C";
+            meta property="og:url" content=(full_url(uri!(motion_view: damm_id = &damm_id)));
+            meta property="og:site_name" content="CONsortium MAS";
+
+            meta name="twitter:card" content="summary";
+
             link rel="index" href=(uri!(motion_index: _));
-            //todo: meta tags
         },
         markup
     )

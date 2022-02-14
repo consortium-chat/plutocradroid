@@ -66,6 +66,7 @@ pub fn main() {
         debug_utils::impersonate,
         debug_utils::fabricate,
         debug_utils::make_auction,
+        debug_utils::make_motion,
     ]);
     r.launch();
 }

@@ -137,6 +137,41 @@ pub fn make_auction(
     Ok(Redirect::to(uri))
 }
 
+#[get("/debug_util/make_motion?<is_super>&<content>&<called_by>")]
+pub fn make_motion(
+    ctx: CommonContext,
+    is_super: bool,
+    content: String,
+    called_by: i64,
+) -> Result<Redirect, template::ErrorResponse> {
+    let now = Utc::now();
+    if called_by < 0 {
+        return hard_err(Status::BadRequest);
+    }
+
+    use schema::motions::dsl as mdsl;
+    use schema::thing_ids::dsl as tdsl;
+
+    let id:i64 = diesel::insert_into(tdsl::thing_ids)
+        .default_values()
+        .returning(tdsl::rowid)
+        .get_result(&*ctx)
+        .unwrap();
+    diesel::insert_into(mdsl::motions).values((
+        mdsl::rowid.eq(id),
+        mdsl::command_message_id.eq(-1), //HAXXXX
+        mdsl::bot_message_id.eq(-1), //MOAR HAXXXX
+        mdsl::motion_text.eq(content),
+        mdsl::motioned_at.eq(now),
+        mdsl::last_result_change.eq(now),
+        mdsl::is_super.eq(is_super),
+        mdsl::motioned_by.eq(called_by),
+    )).execute(&*ctx).unwrap();
+
+    let uri = uri!(super::motions::motion_view: crate::damm::add_to_str(id.to_string()));
+
+    Ok(Redirect::to(uri))
+}
 
 #[get("/debug_util")]
 pub fn debug_util_forms(
@@ -175,6 +210,20 @@ pub fn debug_util_forms(
                 "for at least"
                 input type="number" name="min";
                 input type="text" name="bid_ty";
+                button type="submit" { "go" }
+            }
+            br;br;
+            form action="/debug_util/make_motion" method="get" {
+                "Make "
+                select name="is_super" {
+                    option value="false" { "simple" }
+                    option value="true" { "super" }
+                }
+                " motion called by "
+                input type="number" name="called_by";
+                br;
+                textarea name="content" {}
+                br;
                 button type="submit" { "go" }
             }
             br;br;
