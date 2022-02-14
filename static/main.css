@@ -3,7 +3,8 @@ html {
     max-width:70ch;
     padding:2ch;
     margin:auto;
-    color:#333;
+    color:#0b2228;
+    background-color: #f0f0ef;
     font-size:1.2em;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
 }
@@ -72,7 +73,7 @@ html {
 }
 
 .balances {
-    border: 1px solid black;
+    border: 1px solid currentColor;
     padding: 5px;
     margin-top: 1rem;
 }
@@ -82,7 +83,7 @@ html {
 }
 
 .tabley-table {
-    border: 1px solid black;
+    border: 1px solid currentColor;
 }
 
 .tabley-table > thead > tr > td,
@@ -94,7 +95,7 @@ html {
 {
     padding-left: 2px;
     padding-right: 2px;
-    border: 1px solid black;
+    border: 1px solid currentColor;
 }
 
 .filter-button {
@@ -147,4 +148,33 @@ input[type=radio] {
 
 #transfer_destination_input {
     width: 100%;
+}
+
+.mt-header {
+    max-width: 100%;
+    margin-top: 5px;
+    margin-bottom: 5px;
+}
+
+#mt-header-light {
+    display: block;
+}
+
+#mt-header-dark {
+    display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+    html {
+        color: #f0f0ef;
+        background-color: #0b2228;
+    }
+
+    #mt-header-light {
+        display: none;
+    }
+
+    #mt-header-dark {
+        display: block;
+    }
 }

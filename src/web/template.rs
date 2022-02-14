@@ -43,7 +43,9 @@ pub fn bare_page(
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 meta name="application-name" content="CONsortium M.A.S.";
-                //dont see a need for a theme-color
+                meta name="theme-color" content="#f0f0ef";
+                meta name="color-scheme" content="light dark";
+                meta name="supported-color-schemes" content="light dark";
 
                 title { (title.as_ref()) }
                 link rel="stylesheet" href={"/" (static_path!(main.css))};
@@ -52,6 +54,8 @@ pub fn bare_page(
                 (head_content)
             }
             body {
+                img #mt-header-dark.mt-header src=(super::statics::static_path!(mt_darkmode.png));
+                img #mt-header-light.mt-header src=(super::statics::static_path!(mt_lightmode.png));
                 div.container {
                     (body_content)
                     footer.build-info {
