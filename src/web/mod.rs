@@ -28,7 +28,9 @@ fn index(
         &mut ctx,
         PageTitle("CONsortium MAS"),
         full_url(uri!(index)).into(),
-        html!{},
+        html!{
+            meta name="description" content="Management and Access System for the CONsortium.";
+        },
         html!{
             "Welcome to CONsortium MAS."
         },

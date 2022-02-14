@@ -46,6 +46,7 @@ pub fn bare_page(
                 meta name="theme-color" content="#f0f0ef";
                 meta name="color-scheme" content="light dark";
                 meta name="supported-color-schemes" content="light dark";
+                meta name="format-detection" content="telephone=no";
 
                 title { (title.as_ref()) }
                 link rel="stylesheet" href={(static_path!(main.css))};

@@ -480,6 +480,7 @@ pub fn auction_view(
         full_url(uri!(auction_view: damm_id = damm_id)).into(),
         html!{
             //todo: add meta tags
+            link rel="index" href=(uri!(auction_index));
         },
         content
     )

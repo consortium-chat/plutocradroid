@@ -403,6 +403,7 @@ pub fn motion_view(
         PageTitle(format!("Motion #{}", motion.damm_id())),
         full_url(uri!(motion_view: damm_id = damm_id)).into(),
         html!{
+            link rel="index" href=(uri!(motion_index: _));
             //todo: meta tags
         },
         markup
