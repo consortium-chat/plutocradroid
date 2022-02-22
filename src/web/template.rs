@@ -56,8 +56,8 @@ pub fn bare_page(
                 (head_content)
             }
             body {
-                img #mt-header-dark.mt-header src=(super::statics::static_path!(mt_darkmode.png));
-                img #mt-header-light.mt-header src=(super::statics::static_path!(mt_lightmode.png));
+                img #mt-header-dark.mt-header  src=(super::statics::static_path!(mt_darkmode.png)) alt=r#"CONsortium logo header; A cube in a letter C next to the text "CONSORTIUM""#;
+                img #mt-header-light.mt-header src=(super::statics::static_path!(mt_lightmode.png)) alt=r#"CONsortium logo header; A cube in a letter C next to the text "CONSORTIUM""#;
                 div.container {
                     (body_content)
                     footer.build-info {
@@ -207,10 +207,10 @@ pub fn show_ts(
     }
 }
 
-pub fn embed_head_html<'a>(
+pub fn embed_head_html(
     meta_title: String,
     meta_description: String,
-    self_uri: &rocket::http::uri::Absolute<'a>
+    self_uri: &rocket::http::uri::Absolute<'_>
 ) -> maud::Markup {
     maud::html!{
         meta property="og:title" content=(meta_title);
