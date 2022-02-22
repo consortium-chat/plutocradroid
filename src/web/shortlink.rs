@@ -21,12 +21,12 @@ pub fn shortlink(
 
     let is_motion = select(exists(mdsl::motions.filter(mdsl::rowid.eq(id)))).get_result(&*ctx).unwrap();
     if is_motion {
-        return Some(Redirect::permanent(full_url(uri!(super::motions::motion_view: damm_id = damm_id))));
+        return Some(Redirect::permanent(full_url(uri!(super::motions::motion_view: damm_id = damm_id, cb = _))));
     }
 
     let is_auction = select(exists(adsl::auctions.filter(adsl::rowid.eq(id)))).get_result(&*ctx).unwrap();
     if is_auction {
-        return Some(Redirect::permanent(full_url(uri!(super::auctions::auction_view:   damm_id = damm_id))));
+        return Some(Redirect::permanent(full_url(uri!(super::auctions::auction_view: damm_id = damm_id, cb = _))));
     }
 
     None

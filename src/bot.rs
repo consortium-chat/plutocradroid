@@ -698,9 +698,10 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
     let cap_label = if is_super { "Supermotion" } else { "Simple Motion" };
     let mut bot_msg = serenity::model::id::ChannelId(MOTIONS_CHANNEL).send_message(&ctx, |m| {
         m.content(format!(
-            "A motion has been called by {}\n`$vote {}` to vote!",
+            "A motion has been called by {0}\nSay `$vote {1}` or visit {2}/motions/{1} to vote!",
             msg.author.mention(),
-            damm::add_to_str(motion_id.to_string())
+            damm::add_to_str(motion_id.to_string()),
+            crate::SITE_URL,
         )).embed(|e| {
             e.field(cap_label, motion_text, false)
             .field("Votes", "**for 1**/0 against", false)

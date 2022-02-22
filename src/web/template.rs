@@ -4,6 +4,7 @@ use rocket::request::Request;
 use diesel::prelude::*;
 
 use super::statics::static_path;
+use super::prelude::*;
 
 #[derive(Debug,Clone)]
 pub enum ErrorResponse {
@@ -190,13 +191,39 @@ pub fn page<E, T: AsRef<str>>(
     Ok(OkResponse(page_content))
 }
 
+pub fn ts_plain(
+    ts: DateTime<Utc>
+) -> String {
+    ts.with_timezone(&chrono_tz::America::Los_Angeles).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
 pub fn show_ts(
-    ts: chrono::DateTime<chrono::Utc>,
+    ts: DateTime<Utc>,
 ) -> maud::Markup {
     maud::html!{
         time datetime=(ts.to_rfc3339()) {
-            (ts.with_timezone(&chrono_tz::America::Los_Angeles).to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+            (ts_plain(ts))
         }
+    }
+}
+
+pub fn embed_head_html<'a>(
+    meta_title: String,
+    meta_description: String,
+    self_uri: &rocket::http::uri::Absolute<'a>
+) -> maud::Markup {
+    maud::html!{
+        meta property="og:title" content=(meta_title);
+        meta property="og:description" content=(meta_description);
+        meta property="og:type" content="website";
+        meta property="og:image" content={ (crate::SITE_URL) (super::statics::static_path!(icon_twitter.png)) };
+        meta property="og:image:alt" content="The CONsortium logo: a cube inside a letter C";
+        meta property="og:url" content=(self_uri);
+        meta property="og:site_name" content="CONsortium MAS";
+
+        meta name="twitter:card" content="summary";
+        meta name="twitter:image" content={ (crate::SITE_URL) (super::statics::static_path!(icon_twitter.png)) };
+        meta name="twitter:image:alt" content="The CONsortium logo: a cube inside a letter C";
     }
 }
 

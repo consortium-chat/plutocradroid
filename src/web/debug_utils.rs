@@ -132,7 +132,7 @@ pub fn make_auction(
         adsl::last_timer_bump.eq(now),
     )).execute(&*ctx).unwrap();
 
-    let uri = uri!(super::auctions::auction_view: crate::damm::add_to_str(id.to_string()));
+    let uri = uri!(super::auctions::auction_view: damm_id = crate::damm::add_to_str(id.to_string()), cb = _);
 
     Ok(Redirect::to(uri))
 }
@@ -168,7 +168,7 @@ pub fn make_motion(
         mdsl::motioned_by.eq(called_by),
     )).execute(&*ctx).unwrap();
 
-    let uri = uri!(super::motions::motion_view: crate::damm::add_to_str(id.to_string()));
+    let uri = uri!(super::motions::motion_view: damm_id = crate::damm::add_to_str(id.to_string()), cb = _);
 
     Ok(Redirect::to(uri))
 }

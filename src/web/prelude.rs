@@ -23,6 +23,8 @@ pub(crate) use super::template::{
     soft_err,
     not_found,
     show_ts,
+    ts_plain,
+    embed_head_html,
     PlutoResponse,
     PageTitle,
     CanonicalUrl

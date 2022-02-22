@@ -77,35 +77,19 @@ impl<'q> FromQuery<'q> for MotionFilter {
     }
 }
 
-fn motion_meta_description(motion: &crate::models::MotionWithCount) -> String {
-    let result = if motion.announcement_message_id.is_some() {
-        format!(
-            "{} at ",
-            if motion.is_win {
-                "PASSED"
-            } else {
-                "FAILED"
-            }
-        )
-    } else {
-        format!(
-            "will {} at ",
-            if motion.is_win {
-                "pass"
-            } else {
-                "fail"
-            }
-        )
-    };
+fn motion_meta_description(
+    motion: &crate::models::MotionWithCount,
+    detailed: bool,
+) -> String {
     let votes = if motion.is_win {
         format!(
-            "{} for vs {} against",
+            "{} IN FAVOR vs {} against",
             motion.yes_vote_count,
             motion.no_vote_count,
         )
     } else {
         format!(
-            "{} against vs {} for",
+            "{} AGAINST vs {} in favor",
             motion.yes_vote_count,
             motion.no_vote_count,
         )
@@ -121,13 +105,34 @@ fn motion_meta_description(motion: &crate::models::MotionWithCount) -> String {
         motion.motion_text
     );
 
-    format!(
-        "{}{} with votes {}\n{}",
-        result,
-        super::template::show_ts(motion.end_at()).0,
-        votes,
-        motion_text,
-    )
+    let result = if motion.announcement_message_id.is_some() {
+        if motion.is_win {
+            "PASSED"
+        } else {
+            "FAILED"
+        }.to_string()
+    } else {
+        format!(
+            "May {}",
+            if motion.is_win {
+                "pass"
+            } else {
+                "fail"
+            }
+        )
+    };
+
+    if detailed || motion.announcement_message_id.is_some() {
+        format!(
+            "{} with {} at {}: {}",
+            result,
+            votes,
+            ts_plain(motion.end_at()),
+            motion_text,
+        )
+    } else {
+        motion_text
+    }
 }
 
 #[allow(clippy::branches_sharing_code)]
@@ -278,10 +283,11 @@ pub fn motion_index(
     )
 }
 
-#[get("/motions/<damm_id>")]
+#[get("/motions/<damm_id>?<cb>")]
 pub fn motion_view(
     mut ctx: CommonContext,
-    damm_id: String
+    damm_id: String,
+    cb: Option<String>, //cache buster
 ) -> PlutoResponse {
     let id:i64 = if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
         atoi::atoi(digits.as_slice()).unwrap()
@@ -451,24 +457,18 @@ pub fn motion_view(
         }
     };
 
-    let meta_title = format!("Motion #{} @ CONsortium MAS", motion.damm_id());
+    let meta_title = format!("Motion #{}", motion.damm_id());
     
-    let meta_description = motion_meta_description(&motion);
+    let meta_description = motion_meta_description(&motion, cb.is_some());
+
+    let self_uri = full_url(uri!(motion_view: damm_id = &damm_id, cb = _));
 
     page(
         &mut ctx,
         PageTitle(format!("Motion #{}", motion.damm_id())),
-        full_url(uri!(motion_view: damm_id = &damm_id)).into(),
+        self_uri.clone().into(),
         html!{
-            meta property="og:title" content=(meta_title);
-            meta property="og:description" content=(meta_description);
-            meta property="og:type" content="website";
-            meta property="og:image" content=(super::statics::static_path!(favicon.png)); //TODO: Autogenerate informational icon
-            meta property="og:image:alt" content="Cube inside a large C";
-            meta property="og:url" content=(full_url(uri!(motion_view: damm_id = &damm_id)));
-            meta property="og:site_name" content="CONsortium MAS";
-
-            meta name="twitter:card" content="summary";
+            (embed_head_html(meta_title, meta_description, &self_uri))
 
             link rel="index" href=(uri!(motion_index: _));
         },

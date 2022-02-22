@@ -48,7 +48,7 @@ pub async fn create_auto_auctions(
 
             serenity::model::id::ChannelId::from(bot::MOTIONS_CHANNEL).send_message(cnh.http(), |m| {
                 m.content(format!(
-                    "New auction#{0} started! The Consortium offers 10 gens for bids in pc. Visit <{1}/auctions/{0}> to bid.",
+                    "New auction#{0} started! The Consortium offers 10 gens for bids in pc. Visit {1}/auctions/{0} to bid.",
                     damm::add_to_str(auction_id.to_string()),
                     crate::SITE_URL,
                 ))
@@ -108,7 +108,7 @@ pub async fn process_auctions(
                 serenity::model::id::ChannelId::from(bot::MOTIONS_CHANNEL).send_message(cnh.http(), |m| {
                     use serenity::prelude::Mentionable;
                     m.content(format!(
-                        "Auction#{0} finished. {2} received {3} {4}. Visit <{1}/auctions/{0}> for more details.",
+                        "Auction#{0} finished. {2} received {3} {4}. Visit {1}/auctions/{0} for more details.",
                         damm::add_to_str(auction.auction_id.to_string()),
                         crate::SITE_URL,
                         user_id.into_serenity().mention(),
@@ -120,7 +120,7 @@ pub async fn process_auctions(
                 diesel::update(adsl::auctions.filter(adsl::rowid.eq(auction.auction_id))).set(adsl::finished.eq(true)).execute_async(pool).await?;
                 serenity::model::id::ChannelId::from(bot::MOTIONS_CHANNEL).send_message(cnh.http(), |m| {
                     m.content(format!(
-                        "Auction#{0} finished. There were no bids, no one gets anything. Visit <{1}/auctions/{0}> for no details.",
+                        "Auction#{0} finished. There were no bids, no one gets anything. Visit {1}/auctions/{0} for no details.",
                         damm::add_to_str(auction.auction_id.to_string()),
                         crate::SITE_URL,
                     ))

@@ -232,7 +232,7 @@ pub fn my_transactions(
                                             TransferType::MotionCreate => {
                                                 @let damm_id = crate::damm::add_to_str(txn.to_motion.unwrap().to_string());
                                                 "1 vote, created "
-                                                a href=(uri!(motions::motion_view:damm_id = &damm_id)) {
+                                                a href=(uri!(motions::motion_view:damm_id = &damm_id, cb = _)) {
                                                     "motion #"
                                                     (&damm_id)
                                                 }
@@ -243,7 +243,7 @@ pub fn my_transactions(
                                                 @let damm_id = crate::damm::add_to_str(motion_id.to_string());
                                                 (votes)
                                                 " vote(s) on "
-                                                a href=(uri!(motions::motion_view:damm_id = &damm_id)) {
+                                                a href=(uri!(motions::motion_view:damm_id = &damm_id, cb = _)) {
                                                     "motion #"
                                                     (&damm_id)
                                                 }
@@ -254,7 +254,7 @@ pub fn my_transactions(
                                             TransferType::AuctionCreate => {
                                                 @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
                                                 "Created "
-                                                a href=(uri!(motions::motion_view:damm_id = &damm_id)) {
+                                                a href=(uri!(motions::motion_view:damm_id = &damm_id, cb = _)) {
                                                     "auction #"
                                                     (&damm_id)
                                                 }
@@ -262,7 +262,7 @@ pub fn my_transactions(
                                             TransferType::AuctionReserve => {
                                                 @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
                                                 "Bid on "
-                                                a href=(uri!(motions::motion_view:damm_id = &damm_id)) {
+                                                a href=(uri!(motions::motion_view:damm_id = &damm_id, cb = _)) {
                                                     "auction #"
                                                     (&damm_id)
                                                 }
@@ -270,7 +270,7 @@ pub fn my_transactions(
                                             TransferType::AuctionRefund => {
                                                 @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
                                                 "Outbid on "
-                                                a href=(uri!(super::auctions::auction_view:damm_id = &damm_id)) {
+                                                a href=(uri!(super::auctions::auction_view:damm_id = &damm_id, cb = _)) {
                                                     "auction #"
                                                     (&damm_id)
                                                 }
@@ -278,7 +278,7 @@ pub fn my_transactions(
                                             TransferType::AuctionPayout => {
                                                 @let damm_id = crate::damm::add_to_str(txn.auction_id.unwrap().to_string());
                                                 "Won the bid, payout for "
-                                                a href=(uri!(super::auctions::auction_view:damm_id = &damm_id)) {
+                                                a href=(uri!(super::auctions::auction_view:damm_id = &damm_id, cb = _)) {
                                                     "auction #"
                                                     (&damm_id)
                                                 }

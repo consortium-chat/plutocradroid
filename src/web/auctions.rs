@@ -353,11 +353,13 @@ pub fn auction_bid(
     }
 }
 
-#[get("/auctions/<damm_id>")]
+#[get("/auctions/<damm_id>?<cb>")]
 pub fn auction_view(
     damm_id: String,
+    cb: Option<String>, // CB = Cache Buster, purposefully ignored
     mut ctx: CommonContext,
 ) -> PlutoResponse {
+    let detailed_embed = cb.is_some();
     let id:i64 = if let Some(digits) = crate::damm::validate_ascii(damm_id.as_str()) {
         atoi::atoi(digits.as_slice()).unwrap()
     } else {
@@ -475,56 +477,57 @@ pub fn auction_view(
     };
 
     let meta_title = format!(
-        "Auction#{} for {} {} @ CONsortium MAS",
+        "Auction#{} for {} {}",
         auction.damm(),
         auction.offer_amt,
         auction.offer_ty,
     );
 
-    let meta_description = if auction.finished {
-        if let Some(winner) = auction.winner() {
+    let meta_description = if detailed_embed || auction.finished {
+        if auction.finished {
+            if let Some(winner) = auction.winner() {
+                format!(
+                    "Auction finished: {winner} won {offer_amt} {offer_ty} for {bid_amt} {bid_ty} at {ts}.",
+                    winner     = crate::names::name_of(winner.0),
+                    bid_amt    = winner.1,
+                    bid_ty     = auction.bid_ty,
+                    ts         = ts_plain(auction.end_at()),
+                    offer_amt  = auction.offer_amt,
+                    offer_ty   = auction.offer_ty,
+                )
+            } else {
+                format!(
+                    "Auction ended with no bids; Minimum bid was {} {}",
+                    auction.bid_min,
+                    auction.bid_ty,
+                )
+            }
+        } else if let Some(winner) = auction.winner() {
             format!(
-                "Auction won by {} paying {} {}.",
-                crate::names::name_of(winner.0),
-                winner.1,
-                auction.bid_ty,
+                "Current bid is {bid_amt} {bid_ty} by {winner}",
+                bid_amt = winner.1,
+                bid_ty  = auction.bid_ty,
+                winner  = crate::names::name_of(winner.0),
             )
         } else {
             format!(
-                "Auction ended with no bids; Minimum bid was {} {}",
+                "No bids; Minimum bid is {} {}",
                 auction.bid_min,
                 auction.bid_ty,
             )
         }
-    } else if let Some(winner) = auction.winner() {
-        format!(
-            "Current bid is {} {} by {}",
-            winner.1,
-            auction.bid_ty,
-            crate::names::name_of(winner.0),
-        )
     } else {
-        format!(
-            "No bids; Minimum bid is {} {}",
-            auction.bid_min,
-            auction.bid_ty,
-        )
+        "Auction status and current bid at MAS.".to_string()
     };
+
+    let self_uri = full_url(uri!(auction_view: damm_id = &damm_id, cb = _));
 
     page(
         &mut ctx,
         PageTitle(format!("Auction#{}",damm_id)),
-        full_url(uri!(auction_view: damm_id = &damm_id)).into(),
+        self_uri.clone().into(),
         html!{
-            meta property="og:title" content=(meta_title);
-            meta property="og:description" content=(meta_description);
-            meta property="og:type" content="website";
-            meta property="og:image" content=(super::statics::static_path!(favicon.png)); //TODO: Autogenerate informational icon
-            meta property="og:image:alt" content="Cube inside a large C";
-            meta property="og:url" content=(full_url(uri!(auction_view: damm_id = &damm_id)));
-            meta property="og:site_name" content="CONsortium MAS";
-
-            meta name="twitter:card" content="summary";
+            (embed_head_html(meta_title, meta_description, &self_uri))
 
             link rel="index" href=(uri!(auction_index));
         },
