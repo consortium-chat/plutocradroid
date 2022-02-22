@@ -1,3 +1,7 @@
+## 1.3.1
+
+* Added users to known user list
+
 ## 1.3.0
 
 * Added meta tags for fancy embeds when you paste a motion or auction MAS link in Discord, Signal, Twitter, and others.
