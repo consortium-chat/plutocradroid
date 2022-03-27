@@ -29,6 +29,11 @@ pub const SITE_URL:&str = "https://pluto-test.shelvacu.com";
 #[cfg(not(feature = "debug"))]
 pub const SITE_URL:&str = "https://mas.consortium.chat";
 
+// https://mas.consortium.chat/motions/2860
+const MAX_MOTIONS_PER_DAY:u8 = 10;
+// https://mas.consortium.chat/motions/2121
+const MAX_MOTION_LENGTH_CODEPOINTS:u16 = 1000;
+
 #[cfg(feature = "debug")]
 lazy_static! {
     pub static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::seconds(30);
@@ -41,7 +46,7 @@ lazy_static! {
 #[cfg(not(feature = "debug"))]
 lazy_static! {
     pub static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::hours(24);
-    pub static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::hours(48);
+    pub static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::hours(96);
     pub static ref AUCTION_EXPIRATION:chrono::Duration = chrono::Duration::hours(48);
     pub static ref AUTO_AUCTION_AT:chrono::NaiveTime = chrono::NaiveTime::from_hms(7,0,0);
     pub static ref AUTO_AUCTION_EVERY:chrono::Duration = chrono::Duration::days(7);

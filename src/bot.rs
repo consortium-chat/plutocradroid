@@ -680,6 +680,16 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
 
     let now = chrono::Utc::now();
 
+    let motion_length_codepoints = motion_text.chars().count();
+    if motion_length_codepoints > crate::MAX_MOTION_LENGTH_CODEPOINTS.into() {
+        msg.reply(&ctx, format!(
+            "Your motion is too long ({} codepoints out of max {})",
+            motion_length_codepoints,
+            crate::MAX_MOTION_LENGTH_CODEPOINTS,
+        )).await?;
+        return Ok(())
+    }
+
     let balance:i64 = bhdsl::balance_history
         .select(bhdsl::balance)
         .filter(bhdsl::ty.eq("pc"))
@@ -690,6 +700,19 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
     
     if balance < VOTE_BASE_COST as i64 {
         msg.reply(&ctx, "You don't have enough capital.").await?;
+        return Ok(());
+    }
+
+    //According to motion#2960 "each member is limited to calling 10 motions per UTC day."
+    let today_began_at = now.date().and_time(chrono::NaiveTime::from_hms(0,0,0)).unwrap();
+    let motion_count = || mdsl::motions
+        .filter(mdsl::motioned_by.eq(msg.author.id.0 as i64))
+        .filter(mdsl::motioned_at.ge(today_began_at))
+        .count();
+    let motion_count_utc_today:i64 = motion_count().get_result_async(&*pool).await?;
+
+    if motion_count_utc_today >= crate::MAX_MOTIONS_PER_DAY.into() {
+        msg.reply(&ctx, "You have called too many motions today.").await?;
         return Ok(());
     }
     
@@ -709,7 +732,11 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
         })
     }).await?;
 
+    let mut delete_message = false;
+
     pool.transaction(|txn| {
+        diesel::sql_query("LOCK TABLE motions IN EXCLUSIVE MODE;").execute(&*txn)?;
+        let motion_count_utc_today:i64 = motion_count().get_result(&*txn)?;
         let mut handle = TransferHandler::new(
             txn,
             vec![msg.author.id.into()],
@@ -717,8 +744,9 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
         )?;
         let balance = handle.balance(msg.author.id.into(), CurrencyId::PC);
         
-        if balance < VOTE_BASE_COST as i64 {
+        if balance < VOTE_BASE_COST.into() || motion_count_utc_today >= crate::MAX_MOTIONS_PER_DAY.into() {
             //msg.author is an asshat attempting to exploit race conditions or was part of an incredibly rare event
+            delete_message = true;
             return Ok(());
         }
 
@@ -753,26 +781,31 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
 
         Ok(())
     }).await?;
-    update_motion_message(&ctx, Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap()), &mut bot_msg).await?;
-    let mut emojis:Vec<_> = (*SPECIAL_EMOJI).iter().collect();
-    emojis.sort_unstable_by_key(|(_,a)| match *a {
-        SpecialEmojiAction::Direction(false) => -2,
-        SpecialEmojiAction::Direction(true) => -1,
-        SpecialEmojiAction::Amount(a) => (*a) as i64
-    });
-    for (emoji_id, _) in emojis {
-        //dbg!(&emoji_id);
-        serenity::model::id::ChannelId::from(MOTIONS_CHANNEL)
-            .create_reaction(
-                &ctx,
-                &bot_msg,
-                serenity::model::channel::ReactionType::Custom{
-                    animated: false,
-                    id: (*emoji_id).into(),
-                    name: Some("no".to_string())
-                }
-            ).await?
-        ;
+    if delete_message {
+        // if this fails, what are you gonna do; send another message to a borked api? just ignore the error
+        let _ = bot_msg.delete(&ctx).await;
+    } else {
+        update_motion_message(&ctx, Arc::clone(ctx.data.read().await.get::<DbPoolKey>().unwrap()), &mut bot_msg).await?;
+        let mut emojis:Vec<_> = (*SPECIAL_EMOJI).iter().collect();
+        emojis.sort_unstable_by_key(|(_,a)| match *a {
+            SpecialEmojiAction::Direction(false) => -2,
+            SpecialEmojiAction::Direction(true) => -1,
+            SpecialEmojiAction::Amount(a) => (*a) as i64
+        });
+        for (emoji_id, _) in emojis {
+            //dbg!(&emoji_id);
+            serenity::model::id::ChannelId::from(MOTIONS_CHANNEL)
+                .create_reaction(
+                    &ctx,
+                    &bot_msg,
+                    serenity::model::channel::ReactionType::Custom{
+                        animated: false,
+                        id: (*emoji_id).into(),
+                        name: Some("no".to_string())
+                    }
+                ).await?
+            ;
+        }
     }
 
     Ok(())
