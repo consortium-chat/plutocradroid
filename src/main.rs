@@ -76,15 +76,24 @@ fn main() {
     env_logger::init();
     
     let args: Vec<String> = env::args().collect();
-    match args[1].to_lowercase().as_str() {
+    if args.len() < 2 {
+        print_usage();
+    }
+    let cmd = &args[1];
+    match cmd.to_lowercase().as_str() {
         "bot" => tokio::runtime::Runtime::new().unwrap().block_on(bot::bot_main()),
         "web" => web::main(),
         "worker" => tokio::runtime::Runtime::new().unwrap().block_on(worker::main()),
         "fix_transactions" => fix_transactions::fix_transactions(),
         _ => {
-            eprintln!("usage: plutocradroid <cmd>\n");
-            eprintln!("available commands: bot, web, worker, fix_transactions");
-            std::process::exit(100);
+            eprintln!("unknown subcommand \"{cmd}\"");
+            print_usage();
         }
     }
+}
+
+fn print_usage() {
+    eprintln!("usage: plutocradroid <command>");
+    eprintln!("available commands: bot, web, worker, fix_transactions");
+    std::process::exit(100);
 }
