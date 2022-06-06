@@ -160,9 +160,9 @@ Run migrations
 
 Build&run project
 
-    RUN_BOT=1 cargo run
-    RUN_WEB2=1 cargo run
-    RUN_WORKER=1 cargo run
+    cargo run bot
+    cargo run web
+    cargo run worker
 
 Build in release mode (binary will be in `target/release/plutocradroid`)
 

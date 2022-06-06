@@ -1,3 +1,8 @@
+## 1.5.0
+
+* Added subcommands: `bot`, `web`, `worker`, and `fix_transactions`
+* Removed env mode flags
+
 ## 1.3.1
 
 * Added users to known user list
