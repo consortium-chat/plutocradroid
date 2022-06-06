@@ -60,6 +60,7 @@ where
     }
 }
 
+#[must_use = "TransactionBuilder does nothing on its own, you must pass it to TransferHandler to cause an INSERT."]
 pub struct TransactionBuilder {
     currency_ty: CurrencyId,
     source: Option<UserId>,
@@ -74,7 +75,6 @@ pub struct TransactionBuilder {
     auction_id: Option<i64>,
 }
 
-#[must_use = "TransactionBuilder does nothing on its own, you must pass it to TransferHandler to cause an INSERT."]
 impl TransactionBuilder {
     pub fn new(
         quantity: i64,
