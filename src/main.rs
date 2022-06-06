@@ -74,18 +74,17 @@ fn main() {
     }));
 
     env_logger::init();
-    if env::var_os("RUN_BOT") == Some("1".into()) || env::var_os("RUN") == Some("bot".into()) {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(bot::bot_main());
-    } else if env::var_os("RUN_WEB2") == Some("1".into())|| env::var_os("RUN") == Some("web".into())  {
-        web::main();
-    } else if env::var_os("RUN_WORKER") == Some("1".into())|| env::var_os("RUN") == Some("worker".into())  {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(worker::main());
-    } else if env::var_os("RUN_FIX_TRANSACTIONS") == Some("1".into())|| env::var_os("RUN") == Some("fix_transactions".into())  {
-        fix_transactions::fix_transactions();
-    } else {
-        eprintln!("Must specify RUN_BOT=1, RUN_WEB2=1, or RUN_WORKER=1");
-        std::process::exit(100);
+    
+    let args: Vec<String> = env::args().collect();
+    match args[1].to_lowercase().as_str() {
+        "bot" => tokio::runtime::Runtime::new().unwrap().block_on(bot::bot_main()),
+        "web" => web::main(),
+        "worker" => tokio::runtime::Runtime::new().unwrap().block_on(worker::main()),
+        "fix_transactions" => fix_transactions::fix_transactions(),
+        _ => {
+            eprintln!("usage: plutocradroid <cmd>\n");
+            eprintln!("available commands: bot, web, worker, fix_transactions");
+            std::process::exit(100);
+        }
     }
 }
