@@ -1,5 +1,7 @@
 ## 1.5.0
 
+* Added Submotions, requiring a one-third consensus to pass.
+* Added a Discord command `$submotion` for calling Submotions.
 * Added subcommands: `bot`, `web`, `worker`, and `fix_transactions`
 * Removed env mode flags
 
