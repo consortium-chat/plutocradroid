@@ -22,9 +22,8 @@ mod test {
         assert_eq!(is_win(2, 1, &two), false);
         assert_eq!(is_win(3, 1, &two), true);
         assert_eq!(is_win(1, 1, &half), true);
-        assert_eq!(is_win(1, 3, &third), true);
-        assert_eq!(is_win(1000, 10, &tenth), false);
-        assert_eq!(is_win(1001, 10, &tenth), true);
-        assert_eq!(is_win(1000, 500, &one), false);
+        assert_eq!(is_win(1, 3, &thirdish), true);
+        assert_eq!(is_win(100, 1000, &tenth), false);
+        assert_eq!(is_win(101, 1000, &tenth), true);
     }
 }
