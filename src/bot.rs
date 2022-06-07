@@ -88,17 +88,17 @@ lazy_static! {
 
 pub const VOTE_BASE_COST:u16 = 40;
 #[cfg(not(feature = "debug"))]
-pub const MOTIONS_CHANNEL:u64 = 983019887024807976; //bureaucracy channel
+pub const MOTIONS_CHANNEL:u64 = 609093491150028800; //bureaucracy channel
 #[cfg(feature = "debug")]
 //const MOTIONS_CHANNEL:u64 = 694013828362534983; //pluto-dev channel
 //const MOTIONS_CHANNEL:u64 = 610387757818183690; //test channel in shelvacuisawesomeserver
 //const MOTIONS_CHANNEL:u64 = 560918427091468387; //spam channel
-pub const MOTIONS_CHANNEL:u64 = 983019887024807976; //pluto-beta-messages in CONceptualization
+pub const MOTIONS_CHANNEL:u64 = 770726979456466954; //pluto-beta-messages in CONceptualization
 
 #[cfg(not(feature = "debug"))]
-pub const MY_ID_INT:u64 = 415006970605731844;
+pub const MY_ID_INT:u64 = 690112509537288202;
 #[cfg(feature = "debug")]
-pub const MY_ID_INT:u64 = 415006970605731844;
+pub const MY_ID_INT:u64 = 698996983305863178;
 
 pub const MY_ID:SerenityUserId = SerenityUserId(MY_ID_INT);
 
