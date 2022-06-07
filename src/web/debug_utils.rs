@@ -218,9 +218,9 @@ pub fn debug_util_forms(
             form action="/debug_util/make_motion" method="get" {
                 "Make "
                 select name="power" {
+                    option value="0.5" { "sub" }
                     option value="1" { "simple" }
                     option value="2" { "super" }
-                    option value="0.5" { "sub" }
                 }
                 " motion called by "
                 input type="number" name="called_by";
