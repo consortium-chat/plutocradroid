@@ -62,10 +62,10 @@ table! {
         motion_text -> Text,
         motioned_at -> Timestamptz,
         last_result_change -> Timestamptz,
-        is_super -> Bool,
         announcement_message_id -> Nullable<Int8>,
         needs_update -> Bool,
         motioned_by -> Int8,
+        power -> Numeric,
     }
 }
 

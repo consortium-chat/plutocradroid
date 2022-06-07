@@ -1,39 +1,30 @@
-pub fn is_win(yes_votes:i64, no_votes:i64, is_super:bool) -> bool {
-    if is_super {
-        (yes_votes/2, yes_votes%2) > (no_votes, 0)
-    } else {
-        yes_votes > no_votes
-    }
+use bigdecimal::BigDecimal;
+
+pub fn is_win(yes_votes: i64, no_votes: i64, power: &BigDecimal) -> bool {
+    BigDecimal::from(no_votes) * power >= BigDecimal::from(yes_votes)
 }
 
 #[cfg(test)]
 mod test {
-    fn old_is_win(yes_votes:i64, no_votes:i64, is_super:bool) -> bool {
-        if is_super {
-            let total = yes_votes + no_votes;
-            let div = total / 3;
-            let rem = total % 3;
-            // 10 = 3 rem 1
-            // win is >= 7 (div*2+rem)
-            // 11 = 3 rem 2
-            // win is >= 7 (div*2+rem)
-            // 12 = 4 rem 0
-            // 8 is a "tie", so lose
-            // win is >= 9 (div*2+rem)+1
-            let winning_amount = (div*2+rem) + if rem == 0 {1} else {0};
-            yes_votes >= winning_amount
-        }else{
-            yes_votes > no_votes
-        }
-    }
-
     #[test]
-    fn wins_match(){
+    fn does_win(){
         use super::is_win;
-        assert_eq!(old_is_win(1, 0, false), is_win(1, 0, false));
-        assert_eq!(old_is_win(1, 1, false), is_win(1, 1, false));
-        assert_eq!(old_is_win(1, 2, false), is_win(1, 2, false));
-        assert_eq!(old_is_win(2, 1, true),  is_win(2, 1, true));
-        assert_eq!(old_is_win(3, 1, true),  is_win(3, 1, true));
+        use bigdecimal::BigDecimal;
+        let one = BigDecimal::from(1);
+        let two = BigDecimal::from(2);
+        let half = BigDecimal::from(0.5);
+        let thirdish = BigDecimal::from(0.3333333333);
+        let tenth = BigDecimal::from(0.1);
+        assert_eq!(is_win(1, 0, &one), true);
+        assert_eq!(is_win(1, 1, &one), false);
+        assert_eq!(is_win(1, 2, &one), false);
+        assert_eq!(is_win(2, 1, &one), true);
+        assert_eq!(is_win(2, 1, &two), false);
+        assert_eq!(is_win(3, 1, &two), true);
+        assert_eq!(is_win(1, 1, &half), true);
+        assert_eq!(is_win(1, 3, &third), true);
+        assert_eq!(is_win(1000, 10, &tenth), false);
+        assert_eq!(is_win(1001, 10, &tenth), true);
+        assert_eq!(is_win(1000, 500, &one), false);
     }
 }

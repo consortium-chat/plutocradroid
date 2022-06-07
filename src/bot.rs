@@ -36,7 +36,10 @@ use tokio::task;
 
 use async_trait::async_trait;
 
+use bigdecimal::BigDecimal;
+
 use crate::is_win::is_win;
+use crate::motion_label::motion_label;
 use crate::models::{self, ItemType};
 use crate::transfers::{TransferHandler, TransactionBuilder, TransferError, CurrencyId};
 
@@ -48,7 +51,7 @@ impl serenity::prelude::TypeMapKey for DbPoolKey {
 }
 
 #[group]
-#[commands(ping, give, force_give, balances, motion, supermotion, vote, hack_message_update, help, version_info)]
+#[commands(ping, give, force_give, balances, motion, supermotion, submotion, vote, hack_message_update, help, version_info)]
 struct General;
 
 #[group]
@@ -85,17 +88,17 @@ lazy_static! {
 
 pub const VOTE_BASE_COST:u16 = 40;
 #[cfg(not(feature = "debug"))]
-pub const MOTIONS_CHANNEL:u64 = 609093491150028800; //bureaucracy channel
+pub const MOTIONS_CHANNEL:u64 = 983019887024807976; //bureaucracy channel
 #[cfg(feature = "debug")]
 //const MOTIONS_CHANNEL:u64 = 694013828362534983; //pluto-dev channel
 //const MOTIONS_CHANNEL:u64 = 610387757818183690; //test channel in shelvacuisawesomeserver
 //const MOTIONS_CHANNEL:u64 = 560918427091468387; //spam channel
-pub const MOTIONS_CHANNEL:u64 = 770726979456466954; //pluto-beta-messages in CONceptualization
+pub const MOTIONS_CHANNEL:u64 = 983019887024807976; //pluto-beta-messages in CONceptualization
 
 #[cfg(not(feature = "debug"))]
-pub const MY_ID_INT:u64 = 690112509537288202;
+pub const MY_ID_INT:u64 = 415006970605731844;
 #[cfg(feature = "debug")]
-pub const MY_ID_INT:u64 = 698996983305863178;
+pub const MY_ID_INT:u64 = 415006970605731844;
 
 pub const MY_ID:SerenityUserId = SerenityUserId(MY_ID_INT);
 
@@ -305,7 +308,11 @@ pub async fn update_motion_message(
     use schema::motion_votes::dsl as mvdsl;
     use diesel::prelude::*;
     
-    let (motion_text, motion_id, is_super) = mdsl::motions.filter(mdsl::bot_message_id.eq(msg.id.0 as i64)).select((mdsl::motion_text, mdsl::rowid, mdsl::is_super)).get_result_async(&*pool).await?:(String, i64, bool);
+    let (motion_text, motion_id, power) = mdsl::motions
+        .filter(mdsl::bot_message_id.eq(msg.id.0 as i64))
+        .select((mdsl::motion_text, mdsl::rowid, mdsl::power))
+        .get_result_async(&*pool)
+        .await?: (String, i64, BigDecimal);
     use crate::models::MotionVote;
     let mut votes:Vec<MotionVote> = 
         mvdsl::motion_votes
@@ -322,8 +329,8 @@ pub async fn update_motion_message(
         }
     }
     votes.sort_unstable_by_key(|v| -v.amount);
-    let pass = is_win(yes_votes, no_votes, is_super);
-    let cap_label = if is_super { "Supermotion" } else { "Simple Motion" };
+    let pass = is_win(yes_votes, no_votes, &power);
+    let cap_label = motion_label(&power);
     msg.edit(cnh, |m| {
         m.embed(|e| {
             e.field(cap_label, motion_text, false);
@@ -660,15 +667,20 @@ async fn find_item_type(pool: &DbPool, ty_str:String) -> CommandResult<ItemType>
 
 #[command]
 async fn motion(ctx:&Context, msg:&Message, args:Args) -> CommandResult {
-    motion_common(ctx, msg, args, false).await
+    motion_common(ctx, msg, args, BigDecimal::from(1)).await
 }
 
 #[command]
 async fn supermotion(ctx:&Context, msg:&Message, args:Args) -> CommandResult {
-    motion_common(ctx, msg, args, true).await
+    motion_common(ctx, msg, args, BigDecimal::from(2)).await
 }
 
-async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) -> CommandResult {
+#[command]
+async fn submotion(ctx:&Context, msg:&Message, args:Args) -> CommandResult {
+    motion_common(ctx, msg, args, BigDecimal::from(0.5)).await
+}
+
+async fn motion_common(ctx:&Context, msg:&Message, args:Args, power: BigDecimal) -> CommandResult {
     trace!("motion_common");
     use diesel::prelude::*;
     use schema::motions::dsl as mdsl;
@@ -718,7 +730,7 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
     
     let motion_id:i64 = diesel::insert_into(schema::thing_ids::table).default_values().returning(schema::thing_ids::dsl::rowid).get_result_async(&*pool).await?;
 
-    let cap_label = if is_super { "Supermotion" } else { "Simple Motion" };
+    let cap_label = motion_label(&power);
     let mut bot_msg = serenity::model::id::ChannelId(MOTIONS_CHANNEL).send_message(&ctx, |m| {
         m.content(format!(
             "A motion has been called by {0}\nSay `$vote {1}` or visit {2}/motions/{1} to vote!",
@@ -757,7 +769,7 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, is_super: bool) ->
             mdsl::motion_text.eq(motion_text),
             mdsl::motioned_at.eq(now),
             mdsl::last_result_change.eq(now),
-            mdsl::is_super.eq(is_super),
+            mdsl::power.eq(power),
             mdsl::motioned_by.eq(msg.author.id.0 as i64),
         )).returning(mdsl::rowid).get_result(&*txn)?;
 
@@ -975,14 +987,14 @@ pub fn vote_common(
         use crate::schema::motions::dsl as mdsl;
         use crate::schema::motion_votes::dsl as mvdsl;
 
-        let res:Option<(i64, bool, bool, i64)> = mdsl::motions
+        let res:Option<(i64, bool, BigDecimal, i64)> = mdsl::motions
         .filter(mdsl::rowid.eq(motion_id.unwrap_or(-1)).or(mdsl::bot_message_id.eq(message_id.unwrap_or(-1))))
         .select((
             mdsl::rowid,
             mdsl::announcement_message_id.is_null().and(
                 mdsl::last_result_change.gt(chrono::Utc::now() - *crate::MOTION_EXPIRATION)
             ),
-            mdsl::is_super,
+            mdsl::power,
             mdsl::bot_message_id,
         ))
         .for_update()
@@ -996,7 +1008,7 @@ pub fn vote_common(
             vec![CurrencyId::PC],
         )?;
 
-        if let Some((motion_id, not_announced, is_super, _motion_message_id)) = res {
+        if let Some((motion_id, not_announced, power, _motion_message_id)) = res {
             outer_motion_id = Some(motion_id);
             if not_announced {
                 //dbg!();
@@ -1114,7 +1126,7 @@ pub fn vote_common(
                     Ok(v) => v?,
                 }
 
-                use bigdecimal::{BigDecimal,ToPrimitive};
+                use bigdecimal::ToPrimitive;
                 let get_vote_count = |dir:bool| -> Result<i64, diesel::result::Error> {
                     let votes:Option<BigDecimal> = mvdsl::motion_votes
                     .select(diesel::dsl::sum(mvdsl::amount))
@@ -1128,13 +1140,13 @@ pub fn vote_common(
                 //dbg!(&yes_votes, &no_votes);
                 
 
-                let result_before = is_win(yes_votes, no_votes, is_super);
+                let result_before = is_win(yes_votes, no_votes, &power);
                 if outer_dir {
                     yes_votes += vote_count;
                 }else{
                     no_votes += vote_count;
                 }
-                let result_after = is_win(yes_votes, no_votes, is_super);
+                let result_after = is_win(yes_votes, no_votes, &power);
 
                 diesel::update(
                     mvdsl::motion_votes.filter(mvdsl::motion.eq(motion_id)).filter(mvdsl::user.eq(user_id))

@@ -4,6 +4,7 @@ use rocket::request::{FromQuery, Query};
 
 use super::prelude::*;
 use crate::models::{Motion,MotionWithCount,MotionVote,Transfer,TransferExtra};
+use crate::motion_label::motion_label;
 
 #[derive(Debug, Clone, FromForm)]
 pub struct VoteForm {
@@ -97,11 +98,7 @@ fn motion_meta_description(
 
     let motion_text = format!(
         "{} {}",
-        if motion.is_super {
-            "Super motion"
-        } else {
-            "Simple motion"
-        },
+        motion_label(&motion.power),
         motion.motion_text
     );
 
@@ -139,6 +136,7 @@ fn motion_meta_description(
 fn motion_snippet(
     motion: &crate::models::MotionWithCount
 ) -> maud::Markup {
+    let cap_label = motion_label(&motion.power);
     maud::html!{
         div.motion-titlebar {
             a href=(format!("/motions/{}", motion.damm_id())) {
@@ -167,11 +165,8 @@ fn motion_snippet(
             }
         }
         p {
-            @if motion.is_super {
-                "Super motion "
-            } @else {
-                "Simple motion "
-            }
+            (cap_label)
+            " "
             (motion.motion_text)
         }
         div {

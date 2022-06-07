@@ -191,13 +191,14 @@ pub async fn process_motion_completions(
     use diesel::prelude::*;
     use schema::motions::dsl as mdsl;
     use schema::motion_votes::dsl as mvdsl;
+    use bigdecimal::BigDecimal;
     let now = chrono::Utc::now();
-    let motions:Vec<(String, i64, bool)> = mdsl::motions
+    let motions:Vec<(String, i64, BigDecimal)> = mdsl::motions
         .filter(mdsl::announcement_message_id.is_null())
         .filter(mdsl::last_result_change.lt(now - *crate::MOTION_EXPIRATION))
-        .select((mdsl::motion_text, mdsl::rowid, mdsl::is_super))
+        .select((mdsl::motion_text, mdsl::rowid, mdsl::power))
         .get_results_async(pool).await?;
-    for (motion_text, motion_id, is_super) in &motions {
+    for (motion_text, motion_id, power) in &motions {
         #[derive(Queryable,Debug)]
         struct MotionVote {
             amount:i64,
@@ -216,7 +217,7 @@ pub async fn process_motion_completions(
                 no_votes += vote.amount;
             }
         }
-        let pass = is_win(yes_votes, no_votes, *is_super);
+        let pass = is_win(yes_votes, no_votes, power);
         let pass_msg = if pass { "PASSED" } else { "FAILED" }; 
         let announce_msg = serenity::model::id::ChannelId::from(bot::MOTIONS_CHANNEL).send_message(cnh.http(), |m| {
             m.embed(|e| {
