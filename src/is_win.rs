@@ -1,7 +1,7 @@
 use bigdecimal::BigDecimal;
 
 pub fn is_win(yes_votes: i64, no_votes: i64, power: &BigDecimal) -> bool {
-    BigDecimal::from(no_votes) * power >= BigDecimal::from(yes_votes)
+    BigDecimal::from(no_votes) * power < BigDecimal::from(yes_votes)
 }
 
 #[cfg(test)]
