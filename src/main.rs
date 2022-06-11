@@ -15,6 +15,7 @@ mod view_schema;
 mod damm;
 mod bot;
 mod is_win;
+mod motion_label;
 mod worker;
 mod tasks;
 mod fix_transactions;

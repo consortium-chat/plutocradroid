@@ -137,14 +137,16 @@ pub fn make_auction(
     Ok(Redirect::to(uri))
 }
 
-#[get("/debug_util/make_motion?<is_super>&<content>&<called_by>")]
+#[get("/debug_util/make_motion?<power>&<content>&<called_by>")]
 pub fn make_motion(
     ctx: CommonContext,
-    is_super: bool,
+    power: String,
     content: String,
     called_by: i64,
 ) -> Result<Redirect, template::ErrorResponse> {
+    use bigdecimal::BigDecimal;
     let now = Utc::now();
+    let power_bigd: BigDecimal = power.parse().unwrap();
     if called_by < 0 {
         return hard_err(Status::BadRequest);
     }
@@ -164,7 +166,7 @@ pub fn make_motion(
         mdsl::motion_text.eq(content),
         mdsl::motioned_at.eq(now),
         mdsl::last_result_change.eq(now),
-        mdsl::is_super.eq(is_super),
+        mdsl::power.eq(power_bigd),
         mdsl::motioned_by.eq(called_by),
     )).execute(&*ctx).unwrap();
 
@@ -215,9 +217,10 @@ pub fn debug_util_forms(
             br;br;
             form action="/debug_util/make_motion" method="get" {
                 "Make "
-                select name="is_super" {
-                    option value="false" { "simple" }
-                    option value="true" { "super" }
+                select name="power" {
+                    option value="0.5" { "sub" }
+                    option value="1" { "simple" }
+                    option value="2" { "super" }
                 }
                 " motion called by "
                 input type="number" name="called_by";

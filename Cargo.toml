@@ -14,7 +14,7 @@ lazy_static = "*"
 regex = "1"
 chrono = "*"
 chrono-tz = "*"
-bigdecimal = "=0.1.2"
+bigdecimal = { version = "=0.1.2", features = ["serde"] }
 maplit = "1.0.2"
 ordinal = "*"
 serde = { version = "1.0", features = ["derive"] }

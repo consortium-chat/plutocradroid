@@ -67,15 +67,17 @@ $b
 
 Shows you how many generators and how much capital you have. Remember, except for motions the bot always responds in the same channel it receives the message in, so if you wish to keep your balances private, always run this command in DMs.
 
-### Motion/Supermotion
+### Motion/Supermotion/Submotion
 
 ```text
 $motion <your text here>
 
 $supermotion <your text here>
+
+$submotion <your text here>
 ```
 
-Calls a motion to be voted on. If `$motion` is used, the motion requires a simple majority for the bot to declare it as "passed". If `$supermotion` is used, the motion requires a supermajority, or greater than 2/3rds vote. According to the doc, any motion that "Changes to the core system, including: vote costs, bot behaviour, and creation and distribution of additional gens" must be passed with a 2/3rds vote, ie. with `$supermotion`
+Calls a motion to be voted on. If `$motion` is used, the motion requires a simple majority for the bot to declare it as "passed". If `$supermotion` is used, the motion requires a supermajority, or greater than two-thirds vote. If `$submotion` is used, the motion requires only a one-third submajority. According to the doc, any motion that "Changes to the core system, including: vote costs, bot behaviour, and creation and distribution of additional gens" must be passed with a 2/3rds vote, ie. with `$supermotion`
 
 ### Vote
 
