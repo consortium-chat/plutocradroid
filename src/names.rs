@@ -19,6 +19,7 @@ pub static KNOWN_NAMES: phf::Map<u64, &'static str> = phf::phf_map! {
     359950109229973504u64 => "ManganeseFrog",
     368635452925935616u64 => "TopHatimus",
     373610438560317441u64 => "Matt",
+    113455311058108416u64 => "bowlercaptain"
 };
 
 pub fn name_of(user:impl Into<crate::models::UserId>) -> std::borrow::Cow<'static, str> {
