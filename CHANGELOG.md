@@ -1,3 +1,8 @@
+## 1.5.1
+
+* Display the text of motions when the finish, even if they failed
+* Add `bowlercaptain` to the known user list
+
 ## 1.5.0
 
 * Added Submotions, requiring a one-third consensus to pass.
