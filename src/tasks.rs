@@ -228,7 +228,7 @@ pub async fn process_motion_completions(
                         pass_msg,
                     )
                 );
-                if pass { e.description(motion_text); }
+                e.description(motion_text);
                 e.timestamp(&now);
                 if pass {
                     e.field("Votes", format!("**for {}**/{} against", yes_votes, no_votes), false);
