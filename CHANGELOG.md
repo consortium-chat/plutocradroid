@@ -1,3 +1,7 @@
+## 1.5.2
+
+* Bump auction timer from 48hr to 96hr per [motion#4224](https://mas.consortium.chat/motions/4224).
+
 ## 1.5.1
 
 * Display the text of motions when the finish, even if they failed
