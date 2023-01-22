@@ -40,7 +40,7 @@ lazy_static! {
     pub static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::seconds(30);
     pub static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::minutes(20);
     pub static ref AUCTION_EXPIRATION:chrono::Duration = chrono::Duration::minutes(20);
-    pub static ref AUTO_AUCTION_AT:chrono::NaiveTime = chrono::NaiveTime::from_hms(23, 34, 45);
+    pub static ref AUTO_AUCTION_AT:chrono::NaiveTime = chrono::NaiveTime::from_hms_opt(23, 34, 45).unwrap();
     pub static ref AUTO_AUCTION_EVERY:chrono::Duration = chrono::Duration::days(1);
 }
 
@@ -49,7 +49,7 @@ lazy_static! {
     pub static ref GENERATE_EVERY:chrono::Duration = chrono::Duration::hours(24);
     pub static ref MOTION_EXPIRATION:chrono::Duration = chrono::Duration::hours(96);
     pub static ref AUCTION_EXPIRATION:chrono::Duration = chrono::Duration::hours(96);
-    pub static ref AUTO_AUCTION_AT:chrono::NaiveTime = chrono::NaiveTime::from_hms(7,0,0);
+    pub static ref AUTO_AUCTION_AT:chrono::NaiveTime = chrono::NaiveTime::from_hms_opt(7,0,0).unwrap();
     pub static ref AUTO_AUCTION_EVERY:chrono::Duration = chrono::Duration::days(7);
 }
 

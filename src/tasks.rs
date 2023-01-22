@@ -25,7 +25,7 @@ pub async fn create_auto_auctions(
     if let Some(last_auction) = maybe_last_auction {
         let mut next_auction = chrono_tz::US::Pacific.from_utc_datetime(&last_auction.naive_utc());
         next_auction = next_auction + *crate::AUTO_AUCTION_EVERY;
-        next_auction = next_auction.date().and_time(*crate::AUTO_AUCTION_AT).unwrap();
+        next_auction = next_auction.date_naive().and_time(*crate::AUTO_AUCTION_AT).and_local_timezone(chrono_tz::US::Pacific).unwrap();
 
         if now > next_auction {
             let now = Utc::now();

@@ -1,6 +1,6 @@
 [package]
 name = "plutocradroid"
-version = "1.5.2"
+version = "1.5.3"
 authors = ["Shelvacu <shelvacu@gmail.com>"]
 edition = "2021"
 
@@ -47,9 +47,13 @@ default-features = false
 features = ["blocking", "rustls-tls-webpki-roots"]
 
 [build-dependencies]
-vergen = "5"
+vergen = "7"
 sha2 = "0.9.5"
 hex = "0.4.3"
+
+[patch.crates-io]
+traitobject = { git = "https://github.com/reem/rust-traitobject", rev = "b3471a15917b2caf5a8b27debb0b4b390fc6634f" }
+#destructure_traitobject = { package = "traitobject" }
 
 [features]
 debug = []

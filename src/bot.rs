@@ -716,7 +716,7 @@ async fn motion_common(ctx:&Context, msg:&Message, args:Args, power: BigDecimal)
     }
 
     //According to motion#2960 "each member is limited to calling 10 motions per UTC day."
-    let today_began_at = now.date().and_time(chrono::NaiveTime::from_hms(0,0,0)).unwrap();
+    let today_began_at = now.date_naive().and_time(chrono::NaiveTime::from_hms_opt(0,0,0).unwrap()).and_local_timezone(Utc).unwrap();
     let motion_count = || mdsl::motions
         .filter(mdsl::motioned_by.eq(msg.author.id.0 as i64))
         .filter(mdsl::motioned_at.ge(today_began_at))
